@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "enterprise-rag-system"
+version = "0.1.0"
+description = "Enterprise RAG system using FastAPI, Langchain 0.3, and Milvus"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"  # Langchain 0.3 might have issues with Python 3.12, using 3.10/3.11 is safer
+fastapi = "^0.111.0" # Updated to support Pydantic V2
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+pydantic = "^2.7.1" # Updated to V2
+pydantic-settings = "^2.1.0"
+langchain = "~=0.0.354" # Pinning to a late 0.0.x version as 0.3 doesn't seem to exist as a minor release series. Check PyPI for exact 0.3 tags if needed.
+pymilvus = "^2.3.0" # Check compatibility with your Milvus version
+openai = "^0.28.0" # Older OpenAI SDK likely needed for Langchain 0.0.x
+tiktoken = "^0.5.0" # Often needed by OpenAI integration
+# 添加新的嵌入模型依赖
+dashscope = ">=1.14.1" # 用于 Qwen 嵌入模型
+requests = "^2.31.0" # 用于 Ollama 和 Jina API 调用
+# deepseek-python = "..." # Check for DeepSeek Python SDK if available
+pypdf = "^3.17.0" # For PDF parsing
+python-docx = "^1.1.0" # For DOCX parsing
+markdown = "^3.5.0" # For MD parsing
+python-dotenv = "^1.0.0"
+# Embedding model dependency 
+sentence-transformers = "^2.2.0" # 用于 HuggingFace 和自定义本地模型
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api" 
