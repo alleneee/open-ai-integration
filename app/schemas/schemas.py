@@ -68,12 +68,14 @@ class Message(BaseModel):
 
 class RAGQueryRequest(BaseModel):
     """RAG 查询请求模型"""
+    session_id: str # 新增：用于跟踪对话的唯一标识符
     query: str
     collection_name: Optional[str] = None  # 允许指定知识库（Milvus Collection）
     retrieval_strategy: Literal["vector", "rerank", "hybrid"] = "vector" # 检索策略
     top_k: int = 5 # 检索文档数量
     rerank_top_n: Optional[int] = 3 # 重排后返回的文档数量 (仅当 strategy="rerank")
-    conversation_history: Optional[List[Message]] = None # 对话历史
+    # 移除 conversation_history，它将从 Redis 中获取
+    # conversation_history: Optional[List[Message]] = None # 对话历史
     # 可以添加更多检索参数，如相似度阈值等
 
 # --- 新增：知识库管理模型 ---

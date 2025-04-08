@@ -5,7 +5,6 @@ from langchain_core.runnables import RunnablePassthrough, RunnableParallel, Runn
 from langchain_core.messages import get_buffer_string, BaseMessage, AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, format_document
 from langchain_core.output_parsers import StrOutputParser
-from langchain.memory import ConversationBufferMemory # For managing chat history
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever # Import BaseRetriever
 
@@ -16,6 +15,7 @@ from rank_bm25 import BM25Okapi # Import BM25
 
 from app.services.llm import get_llm # Reuse LLM initialization
 from app.services.vector_store import get_retriever # Reuse retriever logic
+from app.services.conversation import conversation_service # Import conversation service
 from app.schemas.schemas import RAGQueryRequest, RAGResult, Message # Import request/response models
 from app.core.config import settings # Import settings from new core path
 
@@ -394,9 +394,22 @@ def create_rag_chain(
 # --- Main Service Function (Updated) ---
 async def perform_rag_query(request: RAGQueryRequest) -> RAGResult:
     """
-    执行 RAG 查询。
+    执行 RAG 查询，并管理会话历史。
     """
     logger.info(f"收到 RAG 查询请求: collection='{request.collection_name}', strategy='{request.retrieval_strategy}', query='{request.query[:50]}...", extra={'request_details': request.dict(exclude={'conversation_history'})})
+    
+    # 使用 session_id (需要添加到请求模型中)
+    session_id = request.session_id # 假设 session_id 在 RAGQueryRequest 中
+    if not session_id:
+        logger.error("请求中缺少 session_id")
+        return RAGResult(
+            answer="请求错误: 缺少 session_id",
+            source_documents=[]
+        )
+
+    # 从 Redis 获取历史记录
+    chat_history = conversation_service.get_history(session_id)
+    logger.debug(f"会话 {session_id}: 检索到 {len(chat_history)} 条历史消息。")
 
     try:
         # Add hybrid_final_k to request schema or pass top_k as default
@@ -412,15 +425,14 @@ async def perform_rag_query(request: RAGQueryRequest) -> RAGResult:
     except Exception as e:
          logger.error(f"创建 RAG 链失败: {e}")
          return RAGResult(
-             query=request.query,
              answer=f"处理请求时发生内部错误: 无法创建 RAG 链 ({e})",
              source_documents=[]
          )
 
-    # Prepare input
+    # Prepare input using history from Redis
     chain_input = {
         "question": request.query,
-        "conversation_history": request.conversation_history or []
+        "conversation_history": chat_history # 使用从 Redis 获取的历史
     }
 
     # Execute chain
@@ -445,8 +457,12 @@ async def perform_rag_query(request: RAGQueryRequest) -> RAGResult:
         final_answer = result_dict.get("answer", "(无法生成答案)")
         logger.info(f"RAG 查询完成，生成答案: {final_answer[:100]}...", extra={"answer": final_answer, "num_sources": len(source_docs_list)})
 
+        # 更新 Redis 中的历史记录
+        conversation_service.add_message(session_id, Message(role="user", content=request.query))
+        conversation_service.add_message(session_id, Message(role="assistant", content=final_answer))
+        logger.debug(f"会话 {session_id}: 已更新历史记录。")
+
         return RAGResult(
-            query=request.query,
             answer=final_answer,
             source_documents=source_docs_list
         )
@@ -454,7 +470,6 @@ async def perform_rag_query(request: RAGQueryRequest) -> RAGResult:
     except Exception as e:
         logger.exception(f"执行 RAG 链时出错: {e}")
         return RAGResult(
-            query=request.query,
             answer=f"处理查询时发生错误: {e}",
             source_documents=[]
         ) 

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Enterprise RAG system using FastAPI, Langchain 0.3, and Milvus"
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
+packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"  # Langchain 0.3 might have issues with Python 3.12, using 3.10/3.11 is safer

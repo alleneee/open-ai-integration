@@ -152,8 +152,8 @@ try:
     from langchain.retrievers import ContextualCompressionRetriever
     HAS_COHERE = True
 except (ImportError, Exception) as e:
-    HAS_COHERE = False
     logger.warning(f"rerank相关包导入失败，使用模拟对象: {e}")
+    HAS_COHERE = False
     
     # 创建模拟对象
     class CohereRerank:

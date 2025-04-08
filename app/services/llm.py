@@ -1,8 +1,8 @@
 import os
-from typing import Optional, Tuple, List
-from langchain.llms.base import BaseLLM
+from typing import Optional, Tuple, List, Any, Dict, Union
+from langchain_core.language_models import BaseLanguageModel
 # 从 Langchain 0.3 导入特定的 LLM 类 (路径可能不同)
-# from langchain.llms import OpenAI # 示例
+# from langchain_openai import ChatOpenAI  # 示例
 # 需要找到与 LC 0.3 兼容的 DeepSeek 和 Qwen 的等效类或包装器。
 # 如果该版本中没有直接集成, 可能需要自定义包装器。
 
@@ -24,7 +24,7 @@ llm_instances = {}
 # 注意: 这些是占位符, 你需要使用相应的 SDK 实现实际的 API 调用,
 # 并使其符合 Langchain 0.3 的 BaseLLM 接口。
 
-class DeepSeekLLMPlaceholder(BaseLLM):
+class DeepSeekLLMPlaceholder(BaseLanguageModel):
     """DeepSeek LLM 的占位符包装器。需要实现实际的 API 调用逻辑。"""
     model_name: str = settings.deepseek_model_name
     api_key: Optional[str] = settings.deepseek_api_key
@@ -46,7 +46,7 @@ class DeepSeekLLMPlaceholder(BaseLLM):
     def _llm_type(self) -> str:
         return "deepseek_placeholder"
 
-class QwenLLMPlaceholder(BaseLLM):
+class QwenLLMPlaceholder(BaseLanguageModel):
     """通过 Dashscope SDK 使用 Qwen 的占位符包装器。需要实现实际的 API 调用逻辑。"""
     model_name: str = settings.qwen_model_name
     api_key: Optional[str] = settings.dashscope_api_key

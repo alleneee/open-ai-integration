@@ -1,15 +1,15 @@
 import io
 from typing import List
 from fastapi import UploadFile, HTTPException, status
-from langchain.docstore.document import Document # 如果使用 0.3 版本, 确认导入路径是否正确
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 导入特定的加载器 - 确保这些与 Langchain 0.3 兼容
 # 查阅 Langchain 0.3 文档以获取正确的加载器类和导入路径。
 # 这些可能位于 langchain.document_loaders 或类似位置。
-from langchain.document_loaders import PyPDFLoader, UnstructuredMarkdownLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, UnstructuredMarkdownLoader, TextLoader
 # 对于 DOCX, UnstructuredFileLoader 比较常用, 或者可能需要直接使用 python-docx
-# from langchain.document_loaders import UnstructuredFileLoader # 示例
+# from langchain_community.document_loaders import UnstructuredFileLoader # 示例
 import docx # 直接使用 python-docx 作为替代方案
 
 # 允许的内容类型及其对应的文件扩展名
