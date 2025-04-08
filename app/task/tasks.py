@@ -9,16 +9,21 @@ from typing import List, Optional
 # Updated import paths
 from app.task.celery_app import celery_app  # 使用正确的导入路径
 
+logger = logging.getLogger(__name__) # 将 logger 定义移到 try-except 之前
+
 # 视情况模拟这些导入
 try:
-    from app.services.parser import parse_documents # Services path unchanged
+    from app.services.parser import parse_and_split_document # 修正导入的函数名
     from app.services.vector_store import add_documents # Services path unchanged
     HAS_SERVICES = True
-except ImportError:
+except ImportError as e:
     HAS_SERVICES = False
-    logging.warning("无法导入服务模块，使用模拟函数")
+    # 添加详细的 traceback 日志
+    logger.error("导入服务模块失败! 将使用模拟函数。错误详情:", exc_info=True)
+    # logging.warning("无法导入服务模块，使用模拟函数") # 旧的警告
     
-    def parse_documents(*args, **kwargs):
+    # 更新模拟函数名以匹配实际函数（虽然可能不会被调用了）
+    def parse_and_split_document(*args, **kwargs):
         logging.info("[模拟] 解析文档")
         return [], []
         
@@ -28,8 +33,6 @@ except ImportError:
 
 # Import settings if needed directly in task (currently not needed)
 # from app.core.config import settings
-
-logger = logging.getLogger(__name__)
 
 # Define the task
 @celery_app.task(
@@ -66,7 +69,7 @@ def process_document_batch(
         original_filename = original_filenames[i] if i < len(original_filenames) else "unknown"
         logger.info(f"[Task ID: {task_id}] 正在解析文档: {original_filename} (路径: {temp_path})")
         try:
-            parsed_docs = parse_documents([temp_path])
+            parsed_docs = parse_and_split_document([temp_path])
             if not parsed_docs:
                 logger.warning(f"[Task ID: {task_id}] 文档 '{original_filename}' 解析后未产生任何块。")
             else:
