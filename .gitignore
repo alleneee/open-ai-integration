@@ -145,6 +145,7 @@ cython_debug/
 tmp/
 temp/
 /tmp/rag_uploads/
+tmp_uploads/
 
 # OS generated files
 .DS_Store

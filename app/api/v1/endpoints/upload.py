@@ -20,7 +20,7 @@ router = APIRouter()
 # AsyncTaskResponse definition is now in schemas.py
 
 @router.post(
-    "/upload", # Path relative to the router included in main.py
+    "", # 修正路径：移除冗余的 /upload
     response_model=AsyncTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="上传文档进行后台处理 (Upload documents for background processing)",
@@ -59,36 +59,61 @@ async def upload_files(
             
             original_filenames.append(file.filename)
             
-            # Create a unique temporary filename
+            # Create a unique temporary filename suffix
             unique_suffix = uuid.uuid4().hex
             
-            # Sanitize filename slightly before joining
+            # Get original filename and extension
             raw_filename = file.filename or ""
-            safe_filename_base = "".join(c for c in raw_filename if c.isalnum() or c in ('_', '.', '-')).strip()
+            base_name, current_ext = os.path.splitext(raw_filename)
             
-            if not safe_filename_base:
-                safe_filename_base = "uploaded_file"
+            # Sanitize the base name (remove extension first)
+            safe_basename = "".join(c for c in base_name if c.isalnum() or c in ('_', '-')).strip() # Only sanitize the name part
             
-            # Get extension again safely
-            _, current_ext = os.path.splitext(raw_filename)
-            
-            # Construct final temp filename
-            temp_filename = f"{unique_suffix}_{safe_filename_base}{current_ext}"
+            if not safe_basename:
+                safe_basename = "uploaded_file"
+                
+            # Construct final temp filename safely
+            # Ensure the extension starts with a dot if it's not empty
+            safe_ext = ('.' + current_ext.lstrip('.')) if current_ext else ''
+            temp_filename = f"{unique_suffix}_{safe_basename}{safe_ext}" 
             temp_file_path = os.path.join(settings.upload_temp_dir, temp_filename)
 
             logger.info(f"正在保存上传的文件 '{file.filename}' 到临时路径: {temp_file_path}")
             
+            content_read = None # Initialize variable
             try:
-                with open(temp_file_path, "wb") as buffer: 
-                    shutil.copyfileobj(file.file, buffer)
+                # 1. Read entire content into memory
+                logger.debug(f"开始读取 '{file.filename}' 的完整内容...")
+                content_read = await file.read()
+                content_length = len(content_read) if content_read else 0
+                logger.debug(f"'{file.filename}' 读取完成，大小: {content_length} 字节。")
+
+                if not content_read:
+                     logger.warning(f"文件 '{file.filename}' 读取后内容为空，跳过保存。")
+                     continue # Skip to next file if content is empty
+
+                # 2. Write content from memory to file
+                logger.debug(f"开始将内存内容写入到: {temp_file_path}")
+                with open(temp_file_path, "wb") as buffer:
+                    buffer.write(content_read)
+                logger.debug(f"内存内容已写入到: {temp_file_path}")
+                
+                # 3. Verify file size on disk
+                if os.path.exists(temp_file_path):
+                    disk_file_size = os.path.getsize(temp_file_path)
+                    logger.debug(f"磁盘文件大小验证: {disk_file_size} 字节。")
+                    if disk_file_size != content_length:
+                         logger.error(f"严重错误：写入后的磁盘文件大小 ({disk_file_size}) 与读取的内存大小 ({content_length}) 不匹配！ 文件: {temp_file_path}")
+                         # Optionally raise an error here or just log
+                else:
+                    logger.error(f"严重错误：文件写入后在磁盘上未找到！ 文件: {temp_file_path}")
+                    # Optionally raise error
+
                 temp_file_paths.append(temp_file_path)
-                logger.debug(f"文件 '{file.filename}' 已保存到 '{temp_file_path}'")
-            except Exception as e: 
+            except Exception as e:
                 logger.error(f"保存文件 '{file.filename}' 到 '{temp_file_path}' 时出错: {e}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                                   detail=f"无法保存文件 {file.filename}: {e}")
-            finally: 
-                await file.close()
         
         if not temp_file_paths: 
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 

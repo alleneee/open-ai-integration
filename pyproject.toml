@@ -30,7 +30,7 @@ python-dotenv = "^1.0.0"
 sentence-transformers = "^2.7.0" # For HuggingFace/Custom
 langchain-cohere = "^0.3.0" # 更新到与LangChain 0.3.x兼容的版本
 rank-bm25 = "^0.2.2" # Added for BM25 Hybrid Search
-celery = {extras = ["redis"], version = "^5.4.0"} # Added Celery with Redis extras
+celery = {extras = ["redis"], version = "^5.5.1"} # Added Celery with Redis extras
 redis = "^5.0.4" # Added Redis client library
 
 [tool.poetry.group.dev.dependencies]

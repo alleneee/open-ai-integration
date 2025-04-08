@@ -4,6 +4,10 @@ import os
 import logging
 import shutil
 import traceback
+import asyncio # 导入 asyncio
+import time # 导入 time
+# import zipfile # 移除 zipfile 导入
+# import docx # 移除 docx 导入
 from typing import List, Optional
 
 # Updated import paths
@@ -13,7 +17,7 @@ logger = logging.getLogger(__name__) # 将 logger 定义移到 try-except 之前
 
 # 视情况模拟这些导入
 try:
-    from app.services.parser import parse_and_split_document # 修正导入的函数名
+    from app.services.parser import parse_file_from_path_and_split # 导入新的同步解析函数
     from app.services.vector_store import add_documents # Services path unchanged
     HAS_SERVICES = True
 except ImportError as e:
@@ -22,10 +26,10 @@ except ImportError as e:
     logger.error("导入服务模块失败! 将使用模拟函数。错误详情:", exc_info=True)
     # logging.warning("无法导入服务模块，使用模拟函数") # 旧的警告
     
-    # 更新模拟函数名以匹配实际函数（虽然可能不会被调用了）
-    def parse_and_split_document(*args, **kwargs):
+    # 更新模拟函数名
+    def parse_file_from_path_and_split(*args, **kwargs):
         logging.info("[模拟] 解析文档")
-        return [], []
+        return [] # 返回空列表
         
     def add_documents(*args, **kwargs):
         logging.info("[模拟] 添加文档到向量库")
@@ -34,7 +38,11 @@ except ImportError as e:
 # Import settings if needed directly in task (currently not needed)
 # from app.core.config import settings
 
-# Define the task
+# 移除不再需要的常量和函数
+# MAX_WAIT_SECONDS = 5
+# CHECK_INTERVAL = 0.2
+# def wait_for_file_stable(...)
+
 @celery_app.task(
     bind=True, # Allows access to task instance via self
     name="app.tasks.process_document_batch", # Explicit name is good practice
@@ -68,18 +76,38 @@ def process_document_batch(
     for i, temp_path in enumerate(temp_file_paths):
         original_filename = original_filenames[i] if i < len(original_filenames) else "unknown"
         logger.info(f"[Task ID: {task_id}] 正在解析文档: {original_filename} (路径: {temp_path})")
+        
+        # --- 移除等待文件稳定逻辑 --- 
+        # logger.debug(f"[Task ID: {task_id}] 开始等待文件稳定: {temp_path}")
+        # if not wait_for_file_stable(temp_path): ... continue
+        # logger.debug(f"[Task ID: {task_id}] 文件已稳定，继续处理: {temp_path}")
+        # ---------------------------
+        
+        # --- 移除直接测试 python-docx 打开 --- 
+        # is_docx = ...
+        # if is_docx:
+        #    try: ... except ... errors.append(...) # Keep error append?
+        # ---------------------------------------
+            
         try:
-            parsed_docs = parse_and_split_document([temp_path])
+            # 调用解析函数
+            parsed_docs = parse_file_from_path_and_split(temp_path, original_filename)
+            
             if not parsed_docs:
                 logger.warning(f"[Task ID: {task_id}] 文档 '{original_filename}' 解析后未产生任何块。")
+            elif not isinstance(parsed_docs, list):
+                logger.error(f"[Task ID: {task_id}] 解析函数返回了意外类型: {type(parsed_docs)}")
+                raise TypeError(f"解析函数未返回列表: {type(parsed_docs)}")
             else:
-                for doc in parsed_docs:
-                    doc.metadata = {'source': original_filename, **(doc.metadata or {})}
                 all_docs.extend(parsed_docs)
                 logger.info(f"[Task ID: {task_id}] 文档 '{original_filename}' 解析成功，生成 {len(parsed_docs)} 个块。")
             processed_files_count += 1
+        except (IOError, ValueError, RuntimeError, TypeError) as parse_err:
+            error_msg = f"解析文档 '{original_filename}' (路径: {temp_path}) 时失败: {parse_err}"
+            logger.error(f"[Task ID: {task_id}] {error_msg}")
+            errors.append({"filename": original_filename, "error": str(parse_err)})
         except Exception as e:
-            error_msg = f"解析文档 '{original_filename}' (路径: {temp_path}) 时失败: {e}"
+            error_msg = f"解析文档 '{original_filename}' (路径: {temp_path}) 时发生意外错误: {e}"
             logger.exception(f"[Task ID: {task_id}] {error_msg}")
             errors.append({"filename": original_filename, "error": str(e)})
         finally:
@@ -89,7 +117,6 @@ def process_document_batch(
                     os.remove(temp_path)
                     logger.debug(f"[Task ID: {task_id}] 已删除临时文件: {temp_path}")
             except OSError as e:
-                # Log error but don't let cleanup failure stop the task
                 logger.error(f"[Task ID: {task_id}] 删除临时文件 {temp_path} 失败: {e}")
 
     # 3. Add parsed documents to vector store (if any were successful)
