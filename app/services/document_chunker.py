@@ -61,7 +61,8 @@ class DocumentChunker:
         document_path: str, 
         chunking_strategy: str = "paragraph",
         chunk_size: int = 1000,
-        chunk_overlap: int = 200
+        chunk_overlap: int = 200,
+        custom_separators: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         异步分块文档
@@ -71,6 +72,7 @@ class DocumentChunker:
             chunking_strategy: 分块策略，支持 paragraph, token, character, markdown, sentence, adaptive
             chunk_size: 分块大小
             chunk_overlap: 分块重叠大小
+            custom_separators: 自定义分隔符列表
             
         Returns:
             分块后的文档块列表
@@ -79,7 +81,8 @@ class DocumentChunker:
             document_path=document_path,
             chunking_strategy=chunking_strategy,
             chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
+            chunk_overlap=chunk_overlap,
+            custom_separators=custom_separators
         )
     
     @staticmethod
@@ -87,7 +90,8 @@ class DocumentChunker:
         document_path: str, 
         chunking_strategy: str = "paragraph",
         chunk_size: int = 1000,
-        chunk_overlap: int = 200
+        chunk_overlap: int = 200,
+        custom_separators: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         分块文档
@@ -97,6 +101,7 @@ class DocumentChunker:
             chunking_strategy: 分块策略，支持 paragraph, token, character, markdown, sentence, adaptive
             chunk_size: 分块大小
             chunk_overlap: 分块重叠大小
+            custom_separators: 自定义分隔符列表
             
         Returns:
             分块后的文档块列表
@@ -130,7 +135,8 @@ class DocumentChunker:
             document_path=document_path, 
             chunking_strategy=chunking_strategy,
             chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
+            chunk_overlap=chunk_overlap,
+            custom_separators=custom_separators
         )
         
         if not document_loader or not text_splitter:
@@ -290,10 +296,19 @@ class DocumentChunker:
         document_path: str,
         chunking_strategy: str,
         chunk_size: int,
-        chunk_overlap: int
+        chunk_overlap: int,
+        custom_separators: Optional[List[str]] = None
     ):
         """获取对应的文本分割器"""
         file_extension = Path(document_path).suffix.lower()
+        
+        # 如果提供了自定义分隔符，优先使用
+        if custom_separators:
+            return RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=custom_separators
+            )
         
         # 根据分块策略选择分割器
         if chunking_strategy == "paragraph":
@@ -334,13 +349,41 @@ class DocumentChunker:
             splitter.chunk_size = chunk_size
             splitter.chunk_overlap = chunk_overlap
             return splitter
+        elif chunking_strategy == "newline":
+            # 使用换行符分块
+            return RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=["\n\n", "\n", ""]
+            )
+        elif chunking_strategy == "double_newline":
+            # 仅使用双换行符分块（段落级别）
+            return RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=["\n\n", ""]
+            )
+        elif chunking_strategy == "custom":
+            # 仅在未提供自定义分隔符时使用默认分隔符
+            return RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=["\n\n", "\n", ". ", ", ", " ", ""]
+            )
+        elif chunking_strategy == "chinese":
+            # 针对中文内容的分块策略
+            return RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""]
+            )
         
         # 默认使用递归字符分割器
         return RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
         )
-    
+
     @staticmethod
     def _get_cache_key(
         document_path: str,
