@@ -1,140 +1,171 @@
-from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-# 从 fastapi.exceptions 移除 RequestValidationError 的特定导入
-# from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError # 保留用于处理配置验证错误
-import uvicorn
 import time
+import logging
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
-from app.config import settings
-from app.routers import upload, query
-from app.core.dependencies import get_cached_vector_store # 用于在启动时触发初始化
-# 确保 schema 可导入 (应该没问题)
-# from app.models.schemas import HTTPValidationError, GenericErrorResponse
+# Updated import paths
+from app.core.config import settings
+from app.api.v1.router import api_router # Import the main v1 router
+# Remove direct router imports if they existed
+# from app.routers import upload, query
+# Import dependencies for startup check if needed (though handled internally now)
+from app.services.vector_store import get_milvus_connection, _get_embedding_instance
 
-def create_app() -> FastAPI:
-    _app = FastAPI(
-        title="企业级 RAG API",
-        description="使用 FastAPI、Langchain 和 Milvus 构建的用于上传文档和查询 RAG 系统的 API。",
-        version="0.1.0",
-        # 如果需要, 添加其他 OpenAPI 元数据
+# Configure logging
+logging.basicConfig(level=settings.log_level.upper(), format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title=settings.project_name,
+    version=settings.project_version,
+    openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+    docs_url=f"{settings.api_v1_prefix}/docs",
+    redoc_url=f"{settings.api_v1_prefix}/redoc"
+)
+
+# --- Middleware ---
+# CORS
+if settings.cors_origins:
+    # Convert comma-separated string in env var to list if needed
+    origins = []
+    if isinstance(settings.cors_origins, str):
+        origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+    elif isinstance(settings.cors_origins, list):
+        origins = [str(origin) for origin in settings.cors_origins]
+
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info(f"CORS middleware enabled for origins: {origins}")
+    else:
+        logger.warning("CORS_ORIGINS is set but resulted in an empty list. CORS disabled.")
+
+# Add X-Process-Time header
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.4f}"
+    logger.debug(f"Request {request.method} {request.url.path} processed in {process_time:.4f} secs")
+    return response
+
+# --- Exception Handlers ---
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Log the validation errors for debugging
+    logger.error(f"Validation error for request {request.url.path}: {exc.errors()}", extra={"request_path": request.url.path})
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
     )
 
-    # --- 中间件 ---
-    _app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"], # 为生产环境正确配置允许的源
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"]
+@app.exception_handler(ValidationError) # Catch Pydantic errors specifically if needed elsewhere
+async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
+    logger.error(f"Pydantic validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
     )
 
-    @_app.middleware("http")
-    async def add_process_time_header(request: Request, call_next):
-        """添加处理时间头部的中间件。"""
-        start_time = time.time()
-        response = await call_next(request)
-        process_time = time.time() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-        return response
+@app.exception_handler(ConnectionError)
+async def connection_error_handler(request: Request, exc: ConnectionError):
+    logger.error(f"Connection error encountered: {exc}", extra={"request_path": request.url.path})
+    # Typically related to Milvus or external services
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": f"Service connection failed: {exc}"}, # Avoid leaking too much detail
+    )
 
-    # --- 异常处理器 ---
-    # 移除自定义的 RequestValidationError 处理器; FastAPI 的默认处理器足以应对 Pydantic V2
-    # @_app.exception_handler(RequestValidationError)
-    # async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    #     return JSONResponse(
-    #         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-    #         content={"detail": exc.errors()}, # 使用 Pydantic v1 的 errors()
-    #     )
 
-    @_app.exception_handler(ValidationError) # 捕获请求之外的 Pydantic 验证错误 (例如配置)
-    async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-        """处理 Pydantic 配置或其他非请求验证错误的处理器。"""
-        # Pydantic V2 的 exc.errors() 返回一个字典列表, 对 JSONResponse 来说没问题
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": f"配置验证错误: {exc.errors()}"},
-        )
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled exception for request {request.url.path}: {exc}") # Log full traceback
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        # Be cautious about returning raw exception messages to clients
+        content={"detail": f"An internal server error occurred."}, # Generic message
+        # content={"detail": f"An internal server error occurred: {type(exc).__name__}"}, # Slightly more specific
+    )
 
-    @_app.exception_handler(Exception) # 通用后备处理器
-    async def generic_exception_handler(request: Request, exc: Exception):
-        """处理所有未捕获异常的通用处理器。"""
-        # 在实际应用中在此处记录异常回溯信息
-        print(f"未处理的异常: {exc}")
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "发生意外的内部服务器错误。"},
-        )
+# --- Application Lifecycle ---
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Application startup beginning...")
+    # Ensure Milvus connection is attempted at startup
+    try:
+        get_milvus_connection() # This function now handles connection logic
+        logger.info("Milvus connection check successful during startup.")
+    except ConnectionError as e:
+        logger.critical(f"CRITICAL: Failed to connect to Milvus during startup: {e}. The application might not function correctly.")
+        # Decide if you want to exit or continue with degraded functionality
+        # raise SystemExit(f"Failed to connect to Milvus: {e}")
+    except Exception as e:
+         logger.critical(f"CRITICAL: An unexpected error occurred during Milvus connection check at startup: {e}")
 
-    # --- 路由 ---
-    # 使用 API 版本控制前缀
-    _app.include_router(upload.router, prefix="/api/v1/documents", tags=["文档"])
-    _app.include_router(query.router, prefix="/api/v1/rag", tags=["RAG"])
+    # Initialize embedding model instance (optional, helps catch errors early)
+    try:
+         _get_embedding_instance()
+         logger.info("Embedding model instance initialized successfully during startup.")
+    except Exception as e:
+         logger.critical(f"CRITICAL: Failed to initialize embedding model during startup: {e}")
 
-    # --- 生命周期事件 (可选但推荐) ---
-    # 在较新的 FastAPI 中, 使用 lifespan 上下文管理器
-    # 对于旧版本, 使用 startup/shutdown 事件
-    @_app.on_event("startup")
-    async def startup_event():
-        """应用启动时执行的事件。"""
-        print("应用程序启动中...")
-        # 尝试在启动时初始化向量存储连接以尽早发现问题
-        try:
-            _ = get_cached_vector_store() # 调用依赖项以触发连接
-            print("向量存储连接检查/初始化成功。")
-        except Exception as e:
-            print(f"严重: 启动期间初始化向量存储失败: {e}")
-            # 决定应用是否应启动失败或以 degraded 状态运行
-            # raise RuntimeError("启动时连接向量存储失败。") from e
-        print("应用程序启动完成。")
+    logger.info("Application startup complete.")
 
-    @_app.on_event("shutdown")
-    async def shutdown_event():
-        """应用关闭时执行的事件。"""
-        print("应用程序关闭中...")
-        # 在此处添加任何清理逻辑 (例如, 如果需要, 显式关闭连接)
-        # from pymilvus import connections
-        # connections.disconnect("default") # 如果需要显式断开连接的示例
-        print("应用程序关闭完成。")
 
-    # --- 根路径端点 ---
-    @_app.get("/", tags=["健康检查"], include_in_schema=False) # 不在 OpenAPI 文档中显示根路径
-    async def read_root():
-        """根路径, 返回欢迎信息。"""
-        return {"message": "欢迎使用企业级 RAG API"}
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Application shutdown beginning...")
+    # Clean up resources
+    try:
+        from pymilvus import connections
+        if connections.has_connection("default"):
+             connections.disconnect("default")
+             logger.info("Milvus connection 'default' closed.")
+    except Exception as e:
+        logger.error(f"Error disconnecting from Milvus during shutdown: {e}")
+    logger.info("Application shutdown complete.")
 
-    @_app.get("/health", tags=["健康检查"], status_code=status.HTTP_200_OK)
-    async def health_check():
-        """执行健康检查, 包括检查向量存储连接。"""
-        # 基本健康检查 - 可扩展以检查数据库连接等
-        try:
-            # 如果可能, 检查 Milvus 连接状态
-            # from pymilvus import utility
-            # 这可能很慢, 谨慎使用或使用专用检查
-            # utility.get_connection("default").connected()
-            # 一个更简单的检查可能是确保依赖项不引发 503
-            _ = get_cached_vector_store()
-            return {"status": "ok", "vector_store": "connected"}
-        except Exception as e:
-            print(f"健康检查失败: {e}")
-            # 返回 503 服务不可用状态码
-            return JSONResponse(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content={"status": "error", "detail": "向量存储不可用"}
-            )
+# --- Routers ---
+# Include the main API router
+app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-    return _app
+# --- Root Endpoint ---
+@app.get("/", tags=["Root"], include_in_schema=False) # Hide root from docs
+async def read_root():
+    """根路径，提供一个简单的欢迎消息和版本信息。"""
+    return {
+        "message": f"Welcome to the {settings.project_name}!",
+        "version": settings.project_version,
+        "docs_url": app.docs_url
+        }
 
-# 创建 FastAPI 应用实例
-app = create_app()
+# Add health check endpoint
+@app.get("/health", tags=["Health Check"], status_code=status.HTTP_200_OK)
+async def health_check():
+    """执行基本健康检查，检查 Milvus 连接。"""
+    # Check Milvus connection status
+    milvus_status = "unavailable"
+    try:
+        from pymilvus import connections, utility
+        if not connections.has_connection("default"): get_milvus_connection() # Try connect if not already
+        utility.list_collections(using="default") # Lightweight check
+        milvus_status = "ok"
+    except Exception as e:
+        logger.warning(f"Health check: Milvus connection failed - {e}")
+        milvus_status = "error"
 
-# --- 直接使用 uvicorn 运行的主执行块 (通常用于开发) ---
-# if __name__ == "__main__":
-#     print(f"服务器启动于 {settings.api_host}:{settings.api_port}")
-#     uvicorn.run(
-#         "app.main:app", # 指向 FastAPI 实例
-#         host=settings.api_host,
-#         port=settings.api_port,
-#         reload=True # 为开发启用重新加载, 在生产中禁用
-#     )
+    # Future: Add checks for LLM availability
+    if milvus_status == "ok":
+        return {"status": "ok", "milvus_connection": milvus_status}
+    else:
+         # Return 503 if a critical dependency is down
+         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"status": "error", "milvus_connection": milvus_status})
