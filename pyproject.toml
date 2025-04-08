@@ -11,12 +11,12 @@ fastapi = "^0.111.0" # Updated to support Pydantic V2
 uvicorn = {extras = ["standard"], version = "^0.29.0"}
 pydantic = "^2.7.1" # Updated to V2
 pydantic-settings = "^2.2.1"
-langchain = "^0.1.0" # Use a recent Langchain version compatible with core/community separation
-langchain-openai = "^0.1.3"
-langchain-community = "^0.0.47"
+langchain = "^0.3.0" # 更新到最新的主要版本系列
+langchain-openai = "^0.3.0" # 更新到与langchain兼容的版本
+langchain-community = "^0.3.0" # 更新到与langchain兼容的版本
 pymilvus = "^2.4.1" # Check compatibility with your Milvus version
-openai = "^0.28.0" # Older OpenAI SDK likely needed for Langchain 0.0.x
-tiktoken = "^0.5.0" # Often needed by OpenAI integration
+openai = "^1.1.1" # 使用与新版langchain兼容的OpenAI SDK
+tiktoken = "^0.7.0" # 更新到与langchain-openai 0.3.x兼容的版本
 # 添加新的嵌入模型依赖
 dashscope = "^1.14.1" # For Qwen
 requests = "^2.31.0" # 用于 Ollama 和 Jina API 调用
@@ -27,7 +27,7 @@ markdown = "^3.6" # For MD parsing
 python-dotenv = "^1.0.0"
 # Embedding model dependency 
 sentence-transformers = "^2.7.0" # For HuggingFace/Custom
-langchain-cohere = "^0.1.5" # Added for Cohere Rerank
+langchain-cohere = "^0.3.0" # 更新到与LangChain 0.3.x兼容的版本
 rank-bm25 = "^0.2.2" # Added for BM25 Hybrid Search
 celery = {extras = ["redis"], version = "^5.4.0"} # Added Celery with Redis extras
 redis = "^5.0.4" # Added Redis client library
