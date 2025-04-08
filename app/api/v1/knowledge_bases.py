@@ -234,59 +234,125 @@ async def remove_document_from_knowledge_base(
 
 @router.put(
     "/{kb_id}/chunking-config", 
-    response_model=KnowledgeBaseSchema,
+    response_model=Dict[str, Any],
     summary="更新知识库分块策略"
 )
 async def update_chunking_config(
+    kb_id: str,
     chunking_config: ChunkingConfig,
-    kb_id: str = Path(..., description="知识库ID"),
-    background_tasks: BackgroundTasks = Depends(),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
 ):
     """
-    更新知识库的分块策略，并可选择重新处理所有文档
+    更新知识库分块配置
     
-    - **chunk_size**: 分块大小（字符数）
-    - **chunk_overlap**: 分块重叠大小
-    - **chunking_strategy**: 分块策略，支持 "paragraph", "token", "character", "markdown"
-    - **rechunk_documents**: 是否重新处理知识库中的所有文档
+    Args:
+        kb_id: 知识库ID
+        chunking_config: 分块配置
+        background_tasks: 后台任务
+        current_user: 当前用户
+        
+    Returns:
+        更新结果
     """
-    # 先检查知识库是否存在
-    kb = knowledge_base_service.get_knowledge_base(db=db, kb_id=kb_id)
-    if not kb:
+    # 检查用户是否有权限更新知识库
+    if not is_admin(current_user):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="知识库未找到"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有管理员可以更新知识库分块配置"
         )
     
-    # 检查分块策略是否有效
-    valid_strategies = ["paragraph", "token", "character", "markdown"]
-    if chunking_config.chunking_strategy not in valid_strategies:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无效的分块策略，支持的策略有: {', '.join(valid_strategies)}"
-        )
+    # 调用服务更新分块配置
+    result = await kb_service.update_chunking_config(
+        knowledge_base_id=kb_id,
+        chunking_config=chunking_config,
+        background_tasks=background_tasks
+    )
     
-    # TODO: 权限检查
+    return result
+
+
+@router.get(
+    "/{kb_id}/chunking-strategies", 
+    response_model=List[Dict[str, Any]],
+    summary="获取可用的分块策略"
+)
+async def get_chunking_strategies(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取可用的分块策略
     
-    # 如果需要重新处理文档，使用后台任务
-    if chunking_config.rechunk_documents:
-        background_tasks.add_task(
-            knowledge_base_service.update_chunking_config,
-            db=db,
-            kb_id=kb_id,
-            config=chunking_config
-        )
-        return kb  # 立即返回当前知识库状态
-    else:
-        # 否则直接更新分块策略
-        updated_kb = await knowledge_base_service.update_chunking_config(
-            db=db,
-            kb_id=kb_id,
-            config=chunking_config
-        )
-        return updated_kb
+    Args:
+        current_user: 当前用户
+        
+    Returns:
+        分块策略列表
+    """
+    strategies = [
+        {
+            "id": "paragraph",
+            "name": "段落分块",
+            "description": "按段落进行分块，使用\\n\\n作为主要分隔符",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "token",
+            "name": "Token分块",
+            "description": "按Token数量进行分块，适合大多数文本",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "character",
+            "name": "字符分块",
+            "description": "按字符数进行简单分块",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "markdown",
+            "name": "Markdown分块",
+            "description": "针对Markdown文档优化的分块方式",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "sentence",
+            "name": "句子分块",
+            "description": "按句子进行分块，使用标点符号作为分隔",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "newline",
+            "name": "换行分块",
+            "description": "使用换行符\\n作为分隔符进行分块",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "double_newline",
+            "name": "双换行分块",
+            "description": "仅使用双换行符\\n\\n作为分隔符",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "chinese",
+            "name": "中文分块",
+            "description": "针对中文文本优化的分块方式，使用中文标点作为分隔",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "code",
+            "name": "代码分块",
+            "description": "针对程序代码优化的分块方式",
+            "supports_custom_separators": False
+        },
+        {
+            "id": "custom",
+            "name": "自定义分块",
+            "description": "使用自定义分隔符列表进行分块",
+            "supports_custom_separators": True
+        }
+    ]
+    
+    return strategies
 
 
 @router.post(

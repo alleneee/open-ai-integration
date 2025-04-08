@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Column, String, DateTime, ForeignKey, Table, Boolean, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Table, Boolean, Integer, Text
 from sqlalchemy.orm import relationship, mapped_column, Mapped
 
 from app.models.database import Base
@@ -27,7 +27,7 @@ class KnowledgeBase(Base):
     
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     vector_store: Mapped[str] = mapped_column(String(50), nullable=False, default="milvus")
     embedding_model: Mapped[str] = mapped_column(String(100), nullable=False, default="openai")
     
@@ -35,6 +35,7 @@ class KnowledgeBase(Base):
     chunk_size: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     chunk_overlap: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     chunking_strategy: Mapped[str] = mapped_column(String(50), nullable=False, default="paragraph")
+    custom_separators: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="自定义分隔符，JSON格式存储字符串列表")
     
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
@@ -83,6 +84,7 @@ class KnowledgeBaseUpdate(BaseModel):
     chunk_size: Optional[int] = None
     chunk_overlap: Optional[int] = None
     chunking_strategy: Optional[str] = None
+    custom_separators: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -92,6 +94,7 @@ class ChunkingConfig(BaseModel):
     chunk_overlap: int
     chunking_strategy: str
     rechunk_documents: bool = False
+    custom_separators: Optional[List[str]] = None
     
     @validator('chunk_size')
     def validate_chunk_size(cls, v):
@@ -111,9 +114,24 @@ class ChunkingConfig(BaseModel):
     
     @validator('chunking_strategy')
     def validate_chunking_strategy(cls, v):
-        valid_strategies = ["paragraph", "token", "character", "markdown", "sentence"]
+        valid_strategies = [
+            "paragraph", "token", "character", "markdown", "sentence", 
+            "adaptive", "newline", "double_newline", "custom", "chinese", "code"
+        ]
         if v not in valid_strategies:
             raise ValueError(f'无效的分块策略，有效的策略为: {", ".join(valid_strategies)}')
+        return v
+    
+    @validator('custom_separators')
+    def validate_custom_separators(cls, v, values):
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError('自定义分隔符必须是字符串列表')
+            if not all(isinstance(sep, str) for sep in v):
+                raise ValueError('所有分隔符必须是字符串')
+            # 当策略为custom时，必须提供自定义分隔符
+            if values.get('chunking_strategy') == 'custom' and len(v) == 0:
+                raise ValueError('使用自定义分块策略时必须提供至少一个分隔符')
         return v
 
 

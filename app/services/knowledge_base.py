@@ -4,7 +4,7 @@
 """
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, BackgroundTasks
 
 from app.models.knowledge_base import (
     KnowledgeBase,
@@ -20,6 +20,7 @@ from app.db.session import SessionLocal
 import asyncio
 import logging
 from datetime import datetime
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -268,168 +269,144 @@ class KnowledgeBaseService:
         return kb
         
     async def update_chunking_config(
-        self,
-        db: Session,
-        kb_id: str,
-        config: ChunkingConfig
-    ) -> KnowledgeBase:
+        self, 
+        knowledge_base_id: str, 
+        chunking_config: ChunkingConfig,
+        background_tasks: Optional[BackgroundTasks] = None
+    ) -> Dict[str, Any]:
         """
-        更新知识库的分块配置
+        更新知识库分块配置
         
         Args:
-            db: 数据库会话
-            kb_id: 知识库ID
-            config: 分块配置
+            knowledge_base_id: 知识库ID
+            chunking_config: 分块配置
+            background_tasks: 后台任务
             
         Returns:
-            更新后的知识库对象
+            更新结果
         """
+        db_knowledge_base = self._get_knowledge_base_by_id(knowledge_base_id)
+        if not db_knowledge_base:
+            raise HTTPException(status_code=404, detail=f"未找到ID为 {knowledge_base_id} 的知识库")
+            
         try:
-            # 使用显式事务管理
-            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).with_for_update().first()
-            if not kb:
-                logger.error(f"知识库不存在: {kb_id}")
-                raise ValueError(f"知识库不存在: {kb_id}")
+            # 更新知识库分块配置
+            db_knowledge_base.chunk_size = chunking_config.chunk_size
+            db_knowledge_base.chunk_overlap = chunking_config.chunk_overlap
+            db_knowledge_base.chunking_strategy = chunking_config.chunking_strategy
             
-            # 验证分块配置
-            if config.chunk_size <= 0:
-                raise ValueError("分块大小必须大于0")
-            if config.chunk_overlap < 0:
-                raise ValueError("分块重叠大小必须大于等于0")
-            if config.chunk_overlap >= config.chunk_size:
-                raise ValueError("分块重叠大小必须小于分块大小")
+            # 处理自定义分隔符
+            if chunking_config.custom_separators is not None:
+                db_knowledge_base.custom_separators = json.dumps(chunking_config.custom_separators)
+            else:
+                db_knowledge_base.custom_separators = None
             
-            # 记录原始配置，用于判断是否需要重新处理文档
-            original_config = {
-                "chunk_size": kb.chunk_size,
-                "chunk_overlap": kb.chunk_overlap,
-                "chunking_strategy": kb.chunking_strategy
+            self.db.add(db_knowledge_base)
+            self.db.commit()
+            self.db.refresh(db_knowledge_base)
+            
+            # 如果需要重新分块文档，则在后台处理
+            if chunking_config.rechunk_documents and background_tasks:
+                background_tasks.add_task(
+                    self.rechunk_all_documents, 
+                    knowledge_base_id=knowledge_base_id
+                )
+                
+            return {
+                "status": "success",
+                "message": "知识库分块配置已更新",
+                "rechunk_documents": chunking_config.rechunk_documents
             }
             
-            # 更新知识库分块配置
-            kb.chunk_size = config.chunk_size
-            kb.chunk_overlap = config.chunk_overlap
-            kb.chunking_strategy = config.chunking_strategy
-            kb.updated_at = datetime.now()
-            
-            # 提交事务
-            db.commit()
-            
-            # 如果需要重新处理知识库中的所有文档
-            if config.rechunk_documents:
-                # 获取知识库中的所有文档
-                documents = db.query(Document).join(
-                    knowledge_base_documents,
-                    knowledge_base_documents.c.document_id == Document.id
-                ).filter(
-                    knowledge_base_documents.c.knowledge_base_id == kb_id,
-                    Document.status.in_([DocumentStatus.COMPLETED, DocumentStatus.ERROR])
-                ).all()
-                
-                document_ids = [doc.id for doc in documents]
-                
-                # 批量处理文档
-                if document_ids:
-                    logger.info(f"开始批量重新处理知识库 {kb_id} 中的 {len(document_ids)} 个文档")
-                    
-                    # 在后台任务中处理文档
-                    asyncio.create_task(
-                        self._process_documents_batch(
-                            db=db,
-                            kb_id=kb_id,
-                            document_ids=document_ids,
-                            config_changed=self._is_config_changed(original_config, kb)
-                        )
-                    )
-            
-            return kb
-            
         except Exception as e:
-            db.rollback()
-            logger.error(f"更新知识库分块配置失败: {str(e)}")
-            raise
+            self.db.rollback()
+            logger.error(f"更新知识库分块配置出错: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"更新知识库分块配置出错: {str(e)}")
 
-    @staticmethod
-    def _is_config_changed(original: Dict[str, Any], kb: KnowledgeBase) -> bool:
+    def _prepare_chunking_params(self, knowledge_base: KnowledgeBase) -> Dict[str, Any]:
         """
-        检查分块配置是否有变化
+        准备分块参数
         
         Args:
-            original: 原始配置
-            kb: 知识库对象
+            knowledge_base: 知识库实例
             
         Returns:
-            如果配置有变化，返回True
+            分块参数字典
         """
-        return (
-            original["chunk_size"] != kb.chunk_size or
-            original["chunk_overlap"] != kb.chunk_overlap or
-            original["chunking_strategy"] != kb.chunking_strategy
-        )
-    
-    async def _process_documents_batch(
-        self,
-        db: Session, 
-        kb_id: str,
-        document_ids: List[str],
-        config_changed: bool
-    ) -> None:
+        params = {
+            "chunk_size": knowledge_base.chunk_size,
+            "chunk_overlap": knowledge_base.chunk_overlap,
+            "chunking_strategy": knowledge_base.chunking_strategy
+        }
+        
+        # 如果有自定义分隔符，解析并添加到参数中
+        if knowledge_base.custom_separators:
+            try:
+                custom_separators = json.loads(knowledge_base.custom_separators)
+                if isinstance(custom_separators, list):
+                    params["custom_separators"] = custom_separators
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"解析自定义分隔符出错: {str(e)}")
+                
+        return params
+
+    async def rechunk_all_documents(self, knowledge_base_id: str) -> None:
         """
-        批量处理文档（用于后台任务）
+        重新分块知识库中的所有文档
         
         Args:
-            db: 数据库会话（使用新的会话）
-            kb_id: 知识库ID
-            document_ids: 文档ID列表
-            config_changed: 配置是否有变化
+            knowledge_base_id: 知识库ID
         """
-        from app.services.document_processor import document_processor
+        db_knowledge_base = self._get_knowledge_base_by_id(knowledge_base_id)
+        if not db_knowledge_base:
+            logger.error(f"重新分块时找不到知识库: {knowledge_base_id}")
+            return
         
-        # 创建新的数据库会话，避免使用传入的会话（可能已关闭）
-        new_db = SessionLocal()
+        # 获取知识库中的所有文档
+        documents = self.db.query(Document).join(
+            knowledge_base_documents,
+            knowledge_base_documents.c.document_id == Document.id
+        ).filter(
+            knowledge_base_documents.c.knowledge_base_id == knowledge_base_id
+        ).all()
         
-        try:
-            # 获取最新的知识库信息
-            kb = new_db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
-            if not kb:
-                logger.error(f"批量处理时找不到知识库: {kb_id}")
-                return
-                
-            # 如果配置有变化，才重新处理文档
-            if config_changed:
-                batch_size = 5  # 每批处理的文档数量
-                total_batches = (len(document_ids) + batch_size - 1) // batch_size
-                
-                for batch_idx in range(total_batches):
-                    start_idx = batch_idx * batch_size
-                    end_idx = min(start_idx + batch_size, len(document_ids))
-                    batch_document_ids = document_ids[start_idx:end_idx]
-                    
-                    # 更新处理状态
-                    new_db.query(Document).filter(
-                        Document.id.in_(batch_document_ids)
-                    ).update(
-                        {"status": DocumentStatus.PENDING.value},
-                        synchronize_session=False
-                    )
-                    new_db.commit()
-                    
-                    # 调用批量处理函数
-                    await document_processor.batch_process_documents(
-                        db=new_db,
-                        document_ids=batch_document_ids,
-                        knowledge_base_id=kb_id
-                    )
-                    
-                    # 短暂休眠，避免服务器过载
-                    await asyncio.sleep(0.5)
-                
-                logger.info(f"知识库 {kb_id} 中的所有文档已重新处理完成")
-                
-        except Exception as e:
-            logger.error(f"批量处理文档失败: {str(e)}")
-        finally:
-            new_db.close()
+        if not documents:
+            logger.warning(f"知识库 {knowledge_base_id} 中没有文档，无需重新分块")
+            return
+        
+        # 重新分块所有文档
+        document_ids = [doc.id for doc in documents]
+        logger.info(f"开始重新分块知识库 {knowledge_base_id} 中的 {len(document_ids)} 个文档")
+        
+        # 批量处理文档
+        batch_size = 5  # 每批处理的文档数量
+        total_batches = (len(document_ids) + batch_size - 1) // batch_size
+        
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(document_ids))
+            batch_document_ids = document_ids[start_idx:end_idx]
+            
+            # 更新处理状态
+            self.db.query(Document).filter(
+                Document.id.in_(batch_document_ids)
+            ).update(
+                {"status": DocumentStatus.PENDING.value},
+                synchronize_session=False
+            )
+            self.db.commit()
+            
+            # 重新处理文档
+            await document_processor.batch_process_documents(
+                db=self.db,
+                document_ids=batch_document_ids,
+                knowledge_base_id=knowledge_base_id
+            )
+            
+            # 短暂休眠，避免服务器过载
+            await asyncio.sleep(0.5)
+        
+        logger.info(f"知识库 {knowledge_base_id} 中的所有文档已重新分块完成")
 
     async def rebuild_index(
         self, 
@@ -532,7 +509,7 @@ class KnowledgeBaseService:
                         )
                 
                 # 短暂休眠，避免服务器过载
-                await asyncio.sleep(settings.DOCUMENT_BATCH_SLEEP)
+                await asyncio.sleep(0.5)
             
             logger.info(f"知识库 {kb_id} 的索引重建完成")
             return True
