@@ -1,14 +1,11 @@
 from fastapi import Depends, HTTPException, status
 
-# Import the function that handles connection ensuring it's attempted/established
+# Update import path for vector_store service
 from app.services.vector_store import get_milvus_connection
 
 import logging
 logger = logging.getLogger(__name__)
 
-# 移除旧的依赖项 get_cached_vector_store 和 get_retriever
-
-# 新增：用于确保 Milvus 连接的依赖项 (可选，用于在路由层面强制检查连接)
 def verify_milvus_connection(_=Depends(get_milvus_connection)):
     """
     一个简单的依赖项，它调用 get_milvus_connection 来确保连接尝试成功。
@@ -17,8 +14,8 @@ def verify_milvus_connection(_=Depends(get_milvus_connection)):
     这个依赖项本身不返回任何值，仅用于触发连接检查。
     """
     logger.debug("Milvus connection verified via dependency (verify_milvus_connection).")
-    pass # Pass if get_milvus_connection didn't raise an error
+    pass
 
-# --- 其他潜在的依赖项可以放在这里 --- 
+# --- 其他潜在的依赖项可以放在这里 ---
 # 例如：获取当前用户的依赖项 (如果实现了认证)
-# from app.auth.service import get_current_active_user # 假设的认证服务 
+# from app.auth.service import get_current_active_user 

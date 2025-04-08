@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Tuple, List
 from langchain.llms.base import BaseLLM
 # 从 Langchain 0.3 导入特定的 LLM 类 (路径可能不同)
@@ -5,10 +6,19 @@ from langchain.llms.base import BaseLLM
 # 需要找到与 LC 0.3 兼容的 DeepSeek 和 Qwen 的等效类或包装器。
 # 如果该版本中没有直接集成, 可能需要自定义包装器。
 
-from app.config import settings
+from app.core.config import settings
 
-# 用于缓存 LLM 实例的占位符字典
-_llm_cache = {}
+# Updated import path for settings
+from langchain_openai import ChatOpenAI
+# Add other LLM provider imports as needed
+# from langchain_community.llms import Ollama
+# ... other potential imports ...
+
+import logging
+logger = logging.getLogger(__name__)
+
+# Cache for LLM instances (simple implementation)
+llm_instances = {}
 
 # --- Placeholder LLM Wrappers --- #
 # 注意: 这些是占位符, 你需要使用相应的 SDK 实现实际的 API 调用,
@@ -64,51 +74,69 @@ class QwenLLMPlaceholder(BaseLLM):
 
 # --- LLM Provider Selection --- #
 
-def get_llm(provider: Optional[str] = None) -> Tuple[BaseLLM, str, str]:
-    """初始化并返回指定的 LLM 实例、提供商名称和模型名称。"""
-    selected_provider = provider or settings.default_llm_provider
-    cache_key = selected_provider
+def get_llm(provider: Optional[str] = None) -> Tuple[object, str, str]: # Return type might need refinement based on actual LLM objects
+    """根据配置获取或缓存 LLM 实例。"""
+    provider = provider or settings.llm_provider
+    model_name = None # Initialize model_name
 
-    if cache_key in _llm_cache:
-        llm, model_name = _llm_cache[cache_key]
-        return llm, selected_provider, model_name
+    # Construct a cache key
+    cache_key = f"{provider}"
 
+    if provider == "openai":
+        model_name = settings.openai_llm_model_name
+        cache_key = f"{provider}_{model_name}"
+    elif provider == "ollama":
+        model_name = settings.ollama_llm_model_name
+        cache_key = f"{provider}_{settings.ollama_llm_base_url}_{model_name}"
+    # Add other providers here...
+    else:
+        raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+    if cache_key in llm_instances:
+        logger.debug(f"返回缓存的 LLM 实例: {cache_key}")
+        return llm_instances[cache_key], provider, model_name
+
+    logger.info(f"初始化新的 LLM 实例: {cache_key}")
+    llm = None
     try:
-        llm: BaseLLM
-        model_name: str
-        if selected_provider == "openai":
-            if not settings.openai_api_key:
+        if provider == "openai":
+            if not settings.openai_llm_api_key:
                 raise ValueError("使用 OpenAI LLM 时必须设置 OPENAI_API_KEY。")
-            from langchain.llms import OpenAI # 检查 LC 0.3 的导入路径
-            llm = OpenAI(
-                model_name=settings.openai_model_name,
-                openai_api_key=settings.openai_api_key,
-                temperature=0.1, # 根据需要调整
-                # max_tokens=1024 # 根据需要调整
+            llm = ChatOpenAI(
+                openai_api_key=settings.openai_llm_api_key,
+                model=model_name,
+                # Add other params like temperature, max_tokens if needed
+                temperature=0.7, # Example temperature
             )
-            model_name = settings.openai_model_name
-        elif selected_provider == "deepseek":
-            if not settings.deepseek_api_key:
-                raise ValueError("使用 DeepSeek LLM 时必须设置 DEEPSEEK_API_KEY。")
-            # 使用占位符或你的实际实现
-            llm = DeepSeekLLMPlaceholder() # api_key 和 model_name 已是类属性
-            model_name = settings.deepseek_model_name
-        elif selected_provider == "qwen":
-            if not settings.dashscope_api_key:
-                raise ValueError("使用 Qwen LLM 时必须设置 DASHSCOPE_API_KEY。")
-            # 使用占位符或你的实际实现
-            llm = QwenLLMPlaceholder() # api_key 和 model_name 已是类属性
-            model_name = settings.qwen_model_name
-        else:
-            raise NotImplementedError(f"不支持的 LLM 提供商: '{selected_provider}'")
+        elif provider == "ollama":
+             # Ensure Ollama import path is correct based on langchain_community
+             try:
+                 from langchain_community.chat_models import ChatOllama # Use ChatOllama for chat interface
+             except ImportError:
+                 raise ImportError("无法从 langchain_community 导入 ChatOllama。请确保已安装且版本兼容。")
 
-        _llm_cache[cache_key] = (llm, model_name)
-        print(f"已初始化 LLM 提供商: {selected_provider}, 模型: {model_name}")
-        return llm, selected_provider, model_name
+             if not settings.ollama_llm_base_url or not model_name:
+                 raise ValueError("使用 Ollama LLM 时必须设置 OLLAMA_BASE_URL 和 OLLAMA_LLM_MODEL_NAME。")
+             llm = ChatOllama(
+                 base_url=settings.ollama_llm_base_url,
+                 model=model_name,
+                 # Add other params as needed
+             )
+        # Add elif blocks for other providers...
 
-    except ImportError as e:
-        raise RuntimeError(f"为 {selected_provider} 导入 LLM 依赖失败: {e}。请确保已安装所需包。")
-    except ValueError as e:
-        raise RuntimeError(f"LLM 提供商 {selected_provider} 配置错误: {e}")
+        if llm is None:
+             raise ValueError(f"无法为提供商 '{provider}' 初始化 LLM 实例。")
+
+        llm_instances[cache_key] = llm
+        logger.info(f"LLM 实例 '{cache_key}' 初始化并缓存成功。")
+        return llm, provider, model_name
+
+    except ValueError as ve:
+         logger.error(f"初始化 LLM '{cache_key}' 时配置错误: {ve}")
+         raise ve # Re-raise config errors
+    except ImportError as ie:
+         logger.error(f"初始化 LLM '{cache_key}' 时缺少依赖: {ie}")
+         raise RuntimeError(f"缺少 '{provider}' LLM 的依赖。")
     except Exception as e:
-        raise RuntimeError(f"初始化 LLM 提供商 {selected_provider} 失败: {e}") 
+        logger.exception(f"初始化 LLM '{cache_key}' 时发生未知错误: {e}")
+        raise RuntimeError(f"初始化 LLM '{provider}' 失败: {e}") 
