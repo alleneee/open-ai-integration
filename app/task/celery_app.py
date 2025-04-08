@@ -79,5 +79,6 @@ if HAS_CELERY:
 else:
     logger.warning("使用Celery模拟对象，无法配置实际任务队列")
 
-# No need to call autodiscover_tasks() here if 'include' is used.
-# The worker will automatically discover tasks in the modules listed in 'include'. 
+# 自动发现任务模块
+celery_app.autodiscover_tasks(['app.task'])
+logger.info("Celery任务自动发现已启用") 

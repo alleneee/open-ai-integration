@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    cors_origins: Union[List[str], str] = "*"
 
     # Langchain specific (optional, Langchain might try to auto-detect or use its own defaults)
     # langchain_project: Optional[str] = None
@@ -74,6 +75,7 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     upload_temp_dir: str = "/tmp/rag_uploads" # Example temporary directory
+    redis_url: str = "redis://localhost:6379/2" # Added Redis URL for conversation history
 
     # --- Validators --- 
     @field_validator('milvus_index_params', 'custom_embedding_model_kwargs', mode='before')
