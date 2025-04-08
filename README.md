@@ -32,7 +32,7 @@
     │   │   └── endpoints/
     │   │       ├── upload.py      # 文档上传和处理的端点
     │   │       ├── query.py       # RAG 查询的端点
-    │   │       └── knowledgebase.py # 知识库管理端点
+    │   │       └── knowledge_bases.py # 知识库管理端点
     ├── core/
     │   ├── config.py     # 配置加载 (Pydantic BaseSettings)
     │   ├── security.py   # 安全相关功能 (如密码哈希, JWT)
@@ -42,7 +42,8 @@
     ├── models/
     │   ├── database.py   # 数据库连接和基础类
     │   ├── user.py       # 用户, 角色和权限模型
-    │   └── document.py   # 文档和段落模型
+    │   ├── document.py   # 文档和段落模型
+    │   └── knowledge_base.py # 知识库模型
     ├── schemas/
     │   ├── schemas.py    # API 请求/响应的 Pydantic 模型
     │   └── user.py       # 用户相关的Pydantic模型
@@ -52,7 +53,10 @@
     │   ├── parser.py     # 文档解析逻辑
     │   ├── rag.py        # 核心 RAG 流水线逻辑
     │   ├── vector_store.py  # Milvus 交互逻辑
-    │   └── conversation.py # 会话历史管理 (Redis)
+    │   ├── conversation.py  # 会话历史管理 (Redis)
+    │   ├── document_chunker.py # 文档分块服务
+    │   ├── document_processor.py # 文档处理服务
+    │   └── knowledge_base.py # 知识库服务
     └── task/
         ├── celery_app.py  # Celery 配置
         └── tasks.py       # 异步任务定义
@@ -131,38 +135,103 @@
 * **`POST /api/v1/rag/query`**: 向 RAG 系统发送查询。需要在 JSON 请求体中包含 `session_id` (用于跟踪对话历史) 和 `query`。例如: `{"session_id": "user123_abc", "query": "你的问题是什么?", "top_k": 5}`。返回答案和来源文档。需要认证。
 * **`GET /api/v1/knowledge-bases`**: 获取所有知识库列表。需要认证。
 * **`POST /api/v1/knowledge-bases`**: 创建新的知识库。需要认证。
-* **`GET /api/v1/knowledge-bases/{collection_name}`**: 获取特定知识库的详细信息。需要认证。
-* **`DELETE /api/v1/knowledge-bases/{collection_name}`**: 删除指定的知识库。需要管理员权限。
+* **`GET /api/v1/knowledge-bases/{kb_id}`**: 获取特定知识库的详细信息。需要认证。
+* **`DELETE /api/v1/knowledge-bases/{kb_id}`**: 删除指定的知识库。需要管理员权限。
+* **`PUT /api/v1/knowledge-bases/{kb_id}/chunking-config`**: 更新知识库的分块配置。需要管理员权限。
+* **`GET /api/v1/knowledge-bases/{kb_id}/chunking-strategies`**: 获取所有可用的分块策略。需要认证。
+* **`GET /api/v1/knowledge-bases/{kb_id}/chunking-status`**: 获取知识库文档分块状态。需要认证。
+* **`POST /api/v1/knowledge-bases/{kb_id}/rechunk-all`**: 重新处理知识库中的所有文档。需要管理员权限。
+* **`POST /api/v1/knowledge-bases/{kb_id}/rebuild-index`**: 重建知识库的向量索引。需要管理员权限。
+* **`DELETE /api/v1/knowledge-bases/chunking-cache`**: 清除分块缓存。需要管理员权限。
 * **`GET /`**: 根路径端点 (通常仅用于确认服务运行)。
 * **`GET /health`**: 健康检查端点。
 
-## 用户认证系统
+## 文档分块管理系统
 
-该系统实现了完整的用户认证和授权机制：
+本系统实现了高级文档分块管理功能，支持多种分块策略和性能优化：
 
-### 认证流程
+### 分块策略
 
-* 用户注册: 用户通过 `/api/v1/auth/register` 端点注册账户，提供用户名、邮箱和密码。密码使用 bcrypt 算法安全哈希后存储。
-* 用户登录: 用户通过 `/api/v1/auth/login` 端点登录，系统验证凭据并返回 JWT 令牌。
-* 令牌验证: 受保护的 API 端点通过验证 JWT 令牌来确认用户身份。
-* 令牌刷新: 访问令牌过期后，用户可以使用刷新令牌获取新的访问令牌。
+系统支持多种文档分块策略，可根据不同文档类型和需求选择最合适的策略：
 
-### 角色和权限
+* **段落分块 (paragraph)**: 使用段落作为分隔单位，以`\n\n`等作为主要分隔符
+* **Token分块 (token)**: 按Token数量进行分块，适合大多数文本
+* **字符分块 (character)**: 按字符数进行简单分块
+* **Markdown分块 (markdown)**: 针对Markdown文档优化的分块方式
+* **句子分块 (sentence)**: 按句子进行分块，使用标点符号作为分隔
+* **换行分块 (newline)**: 使用换行符`\n`作为主要分隔符
+* **双换行分块 (double_newline)**: 仅使用双换行符`\n\n`作为分隔符
+* **中文分块 (chinese)**: 针对中文文档优化，使用中文标点符号作为分隔符
+* **代码分块 (code)**: 针对程序代码优化的分块方式
+* **自定义分块 (custom)**: 使用自定义分隔符列表进行分块
 
-系统支持基于角色的访问控制 (RBAC)：
+### 自定义分隔符
 
-* 用户角色: 每个用户可以被分配一个或多个角色 (如管理员、普通用户等)。
-* 权限: 每个角色拥有一组权限，定义了用户可以执行的操作。
-* 资源访问控制: API 端点可以根据用户角色和权限限制访问。
+系统支持自定义分隔符，允许用户根据特定文档需求定义精确的分块规则：
 
-### 数据库模型
+* 可通过API指定自定义分隔符列表
+* 分隔符按优先级顺序应用
+* 支持多种字符序列作为分隔符，如`\n\n`、`\t`、特殊标点等
 
-用户认证系统的核心数据模型包括：
+### 缓存机制
 
-* User: 存储用户信息、凭据和状态。
-* Role: 定义系统中的角色。
-* Permission: 具体的权限定义。
-* User-Role 关联: 多对多关系，允许用户拥有多个角色。
+为提高性能，系统实现了多层缓存机制：
+
+* **分块结果缓存**: 基于文档哈希值缓存分块结果，避免重复处理
+* **向量缓存**: 缓存文档向量，加速查询
+* **分块配置缓存**: 缓存知识库分块配置，减少数据库访问
+
+### 批量处理与异步执行
+
+系统支持大规模文档批量处理：
+
+* 使用后台任务处理长时间运行的分块操作
+* 批量重新处理文档，支持增量更新
+* 索引重建功能，允许在更改配置后快速更新向量存储
+
+### 性能优化
+
+* 自适应线程池：根据服务器资源调整处理线程
+* 批处理暂停：防止服务器过载
+* 事务管理：确保数据一致性
+* 错误恢复：支持从错误中恢复并继续处理
+
+### 配置与监控
+
+* 全局配置参数：可在`app/core/config.py`中设置默认分块参数
+* 分块状态监控：实时跟踪文档处理进度
+* 错误日志记录：详细记录处理过程中的错误信息
+
+## 使用示例
+
+### 更新知识库分块配置
+
+```bash
+curl -X PUT "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/chunking-config" \
+  -H "Authorization: Bearer {your_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chunk_size": 1000,
+    "chunk_overlap": 200,
+    "chunking_strategy": "paragraph",
+    "rechunk_documents": true,
+    "custom_separators": ["\\n\\n", "\\n", ". "]
+  }'
+```
+
+### 获取可用分块策略
+
+```bash
+curl -X GET "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/chunking-strategies" \
+  -H "Authorization: Bearer {your_token}"
+```
+
+### 重建知识库索引
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/rebuild-index" \
+  -H "Authorization: Bearer {your_token}"
+```
 
 ## 重要说明
 
