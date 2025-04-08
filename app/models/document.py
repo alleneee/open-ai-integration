@@ -124,6 +124,17 @@ class DocumentListResponse(BaseModel):
     items: List[DocumentResponse]
     total: int
 
+class DocumentBriefSchema(BaseModel):
+    """文档简要信息模型，用于知识库关联展示"""
+    id: str
+    filename: str
+    file_type: Optional[str] = None
+    status: DocumentStatus
+    segment_count: int
+    
+    class Config:
+        from_attributes = True
+
 # 数据库操作函数
 def create_document(document_data: Dict[str, Any], db: Optional[Session] = None) -> Document:
     """创建文档记录"""

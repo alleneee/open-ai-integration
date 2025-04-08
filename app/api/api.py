@@ -5,7 +5,7 @@ API 路由注册
 from fastapi import APIRouter
 
 from app.api.routes import documents
-from app.api.v1 import auth
+from app.api.v1 import auth, knowledge_bases
 
 # 创建主 API 路由
 api_router = APIRouter()
@@ -13,8 +13,8 @@ api_router = APIRouter()
 # 注册各个功能模块的路由
 api_router.include_router(documents.router, prefix="/documents", tags=["Documents"])
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["Knowledge Bases"])
 
 # 可在此处添加更多路由，例如：
-# from app.api.routes import users, knowledge_bases
+# from app.api.routes import users
 # api_router.include_router(users.router, prefix="/users", tags=["Users"])
-# api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["Knowledge Bases"])
