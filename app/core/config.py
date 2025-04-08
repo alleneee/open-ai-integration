@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # Langchain specific (optional, Langchain might try to auto-detect or use its own defaults)
     # langchain_project: Optional[str] = None
 
+    # 文档处理配置
+    DOCUMENT_PROCESSOR_WORKERS: int = 4  # 文档处理的工作线程数
+    DEFAULT_CHUNK_SIZE: int = 1000  # 默认分块大小
+    DEFAULT_CHUNK_OVERLAP: int = 200  # 默认分块重叠大小
+    DEFAULT_CHUNKING_STRATEGY: str = "paragraph"  # 默认分块策略
+    MAX_BATCH_SIZE: int = 50  # 批量处理的最大记录数
+    ADAPTIVE_CHUNKING: bool = True  # 启用自适应分块
+    DOCUMENT_BATCH_SLEEP: float = 0.5  # 批量处理的休眠时间（秒）
+
     # --- Celery Settings ---
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
