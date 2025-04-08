@@ -11,6 +11,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Log environment variables before initializing Settings
+logger.debug(f"[Config Init] CELERY_BROKER_URL from env: {os.getenv('CELERY_BROKER_URL')}")
+logger.debug(f"[Config Init] CELERY_RESULT_BACKEND from env: {os.getenv('CELERY_RESULT_BACKEND')}")
+
 # 应急默认值，确保应用能启动
 FALLBACK_VALUES = {
     "embedding_provider": "openai",
@@ -173,14 +177,20 @@ class Settings(BaseSettings):
         extra = 'ignore' # Ignore extra fields from .env
 
 try:
+    logger.debug("[Config Init] Attempting to initialize Settings()...")
     settings = Settings()
+    logger.debug(f"[Config Init] Settings initialized. Type: {type(settings)}")
+    logger.debug(f"[Config Init] settings.celery_broker_url: {getattr(settings, 'celery_broker_url', 'NOT FOUND')}")
+    logger.debug(f"[Config Init] settings.celery_result_backend: {getattr(settings, 'celery_result_backend', 'NOT FOUND')}")
     logger.info(f"配置加载成功: embedding_provider={settings.embedding_provider}, default_llm_provider={settings.default_llm_provider}")
 except Exception as e:
-    logger.critical(f"配置加载失败: {e}")
+    logger.critical(f"配置加载失败: {e}", exc_info=True) # Add exc_info=True
     # 回退到基本配置
     settings = Settings(
         embedding_provider=FALLBACK_VALUES["embedding_provider"],
         default_llm_provider=FALLBACK_VALUES["default_llm_provider"],
         milvus_text_max_length=FALLBACK_VALUES["milvus_text_max_length"]
     )
-    logger.warning("已加载应急配置") 
+    logger.warning("已加载应急配置")
+    logger.debug(f"[Config Init - Fallback] settings.celery_broker_url: {getattr(settings, 'celery_broker_url', 'NOT FOUND')}")
+    logger.debug(f"[Config Init - Fallback] settings.celery_result_backend: {getattr(settings, 'celery_result_backend', 'NOT FOUND')}") 
