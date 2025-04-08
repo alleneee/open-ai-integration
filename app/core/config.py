@@ -27,6 +27,33 @@ class Settings(BaseSettings):
     project_version: str = "0.1.0"
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
+    environment: str = "development"  # 默认为开发环境
+
+    # 数据库
+    DATABASE_URI: str = "mysql+pymysql://root:123456@localhost:3306/openai"
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
+    DATABASE_POOL_RECYCLE: int = 3600
+    SQL_ECHO: bool = False  # 是否打印 SQL 语句
+    
+    # 缓存设置
+    REDIS_URL: Optional[str] = "redis://localhost:6379/0"  # Redis连接URL
+    CACHE_EXPIRE_SECONDS: int = 60 * 15  # 缓存过期时间，默认15分钟
+    
+    # 速率限制设置
+    RATE_LIMIT_DEFAULT_TIMES: int = 60  # 默认每分钟请求次数
+    RATE_LIMIT_DEFAULT_SECONDS: int = 60  # 默认时间窗口(秒)
+    RATE_LIMIT_ENABLED: bool = True  # 是否启用速率限制
+    
+    # JWT认证设置
+    SECRET_KEY: str = "your-secret-key-here-replace-in-production"  # JWT密钥，生产环境必须替换
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 访问令牌过期时间（分钟）
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7    # 刷新令牌过期时间（天）
+    ALGORITHM: str = "HS256"              # JWT加密算法
+    TOKEN_URL: str = "/api/v1/auth/login" # 令牌获取端点
+    
+    # 安全设置
+    PASSWORD_HASH_ROUNDS: int = 12        # 密码哈希轮数
 
     # Milvus
     milvus_uri: str = "grpc://localhost:19530"
