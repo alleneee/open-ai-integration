@@ -12,6 +12,7 @@ from typing import List, Optional
 
 # Updated import paths
 from app.task.celery_app import celery_app  # 使用正确的导入路径
+from app.task.task_wrapper import track_task_status, update_task_progress
 
 logger = logging.getLogger(__name__) # 将 logger 定义移到 try-except 之前
 
@@ -51,6 +52,7 @@ except ImportError as e:
     autoretry_for=(Exception,), # Retry for any exception (be cautious with this)
     retry_kwargs={'max_retries': 3, 'countdown': 15} # Example: 3 retries, 15s delay
 )
+@track_task_status(task_type="document_processing", task_name="处理文档批次")
 def process_document_batch(
     self, # 'bind=True' provides access to the task instance
     temp_file_paths: List[str],
@@ -67,7 +69,9 @@ def process_document_batch(
     """
     task_id = self.request.id
     logger.info(f"[Task ID: {task_id}] 开始处理文档批次: {original_filenames}, 目标 Collection: {collection_name}")
-
+    
+    update_task_progress(task_id, 5.0)
+    
     all_docs = []
     errors = []
     processed_files_count = 0
@@ -102,6 +106,9 @@ def process_document_batch(
                 all_docs.extend(parsed_docs)
                 logger.info(f"[Task ID: {task_id}] 文档 '{original_filename}' 解析成功，生成 {len(parsed_docs)} 个块。")
             processed_files_count += 1
+            
+            update_task_progress(task_id, 20.0)
+            
         except (IOError, ValueError, RuntimeError, TypeError) as parse_err:
             error_msg = f"解析文档 '{original_filename}' (路径: {temp_path}) 时失败: {parse_err}"
             logger.error(f"[Task ID: {task_id}] {error_msg}")
@@ -127,6 +134,9 @@ def process_document_batch(
             # add_documents itself calls get_vector_store_instance which handles creation
             add_documents(docs=all_docs, collection_name=collection_name)
             logger.info(f"[Task ID: {task_id}] 成功将 {len(all_docs)} 个文档块添加到 Collection '{collection_name}'。")
+            
+            update_task_progress(task_id, 100.0)
+            
         except Exception as e:
             # This is a critical error for the batch, likely warrants retry/failure
             error_msg = f"将文档块添加到 Collection '{collection_name}' 时失败: {e}"

@@ -11,6 +11,7 @@
 * **会话存储:** Redis
 * **用户认证:** JWT (JSON Web Token)
 * **数据库迁移:** Alembic
+* **任务管理:** 包含任务状态跟踪与取消功能
 
 ## 项目结构
 
@@ -56,10 +57,13 @@
     │   ├── conversation.py  # 会话历史管理 (Redis)
     │   ├── document_chunker.py # 文档分块服务
     │   ├── document_processor.py # 文档处理服务
-    │   └── knowledge_base.py # 知识库服务
+    │   ├── knowledge_base.py # 知识库服务
+    │   └── task_manager.py # 任务状态管理服务
     └── task/
         ├── celery_app.py  # Celery 配置
-        └── tasks.py       # 异步任务定义
+        ├── tasks.py       # 异步任务定义
+        ├── task_wrapper.py # 任务包装器（提供状态跟踪）
+        └── task_cancellation.py # 任务取消功能
 ```
 
 ## 安装与设置
@@ -112,22 +116,33 @@
     * 交互式 API 文档 (Swagger UI) 地址: `http://localhost:8000/docs`。
     * 备选 API 文档 (ReDoc) 地址: `http://localhost:8000/redoc`。
 
-2. **启动 Celery 工作进程:**
+2. **启动 Celery Worker:**
 
     ```bash
-    poetry run celery -A app.task.celery_app worker --loglevel=info
+    # 启动 Celery Worker 处理主队列
+    poetry run celery -A app.task.celery_app worker -l info -Q main_queue
+
+    # 可选: 启动额外的 Worker 处理其他队列
+    poetry run celery -A app.task.celery_app worker -l info -Q document_processing_queue
     ```
 
 ## API 端点
 
 ### 认证相关
 
-* **`POST /api/v1/auth/register`**: 用户注册。需要提供用户名、邮箱和密码。
-* **`POST /api/v1/auth/login`**: 用户登录。登录成功后返回访问令牌和刷新令牌。
-* **`POST /api/v1/auth/token/refresh`**: 刷新访问令牌。
-* **`GET /api/v1/auth/me`**: 获取当前登录用户信息。
-* **`GET /api/v1/auth/users`**: 获取用户列表 (需要管理员权限)。
-* **`GET /api/v1/auth/users/{user_id}`**: 获取特定用户信息 (需要管理员权限或为用户本人)。
+* **`POST /api/v1/auth/register`**: 注册用户账户。需要 email, 密码和用户名。
+* **`POST /api/v1/auth/login`**: 登录并获取 JWT Token。
+* **`POST /api/v1/auth/refresh`**: 刷新过期的 JWT 令牌。
+* **`GET /api/v1/auth/me`**: 获取当前已认证用户的信息。
+
+### 任务管理相关
+
+* **`GET /api/v1/tasks/`**: 获取任务列表，支持分页和筛选。需要认证。
+* **`GET /api/v1/tasks/count`**: 统计符合条件的任务数量。需要认证。
+* **`GET /api/v1/tasks/{task_id}`**: 获取特定任务的详情。需要认证。
+* **`DELETE /api/v1/tasks/{task_id}`**: 取消正在执行的任务。需要认证。
+* **`POST /api/v1/tasks/cancel-batch`**: 批量取消多个任务。需要认证。
+* **`DELETE /api/v1/tasks/cleanup/{days}`**: 清理指定天数之前的旧任务。需要管理员权限。
 
 ### RAG 相关
 
@@ -202,34 +217,81 @@
 * 分块状态监控：实时跟踪文档处理进度
 * 错误日志记录：详细记录处理过程中的错误信息
 
-## 使用示例
+## 任务状态管理系统
 
-### 更新知识库分块配置
+本系统实现了完整的Celery任务状态跟踪与管理功能，支持实时监控任务执行过程和取消正在运行的任务：
+
+### 任务状态追踪
+
+系统提供了全面的任务状态跟踪功能：
+
+* **状态自动记录**：跟踪任务的全生命周期，包括等待、运行、完成、失败等状态
+* **进度报告**：支持任务进度百分比实时更新
+* **结果与错误记录**：自动记录任务执行结果和详细错误信息
+* **任务元数据**：支持存储任务相关的元数据，如参数、用户ID等
+* **执行时间记录**：记录任务开始、完成时间及总执行时长
+
+### 任务取消功能
+
+系统支持多种任务取消方式：
+
+* **单任务取消**：取消特定ID的任务
+* **批量取消**：支持一次取消多个任务
+* **级联取消**：可选择级联取消子任务
+* **强制取消**：支持对已开始运行的任务进行强制终止
+
+### 任务状态枚举
+
+系统支持丰富的任务状态类型：
+
+* **PENDING**: 等待执行
+* **RECEIVED**: 已被Worker接收
+* **STARTED/RUNNING**: 执行中
+* **PROGRESS**: 进行中（带进度）
+* **RETRYING**: 重试中
+* **COMPLETED/SUCCESS**: 已成功完成
+* **FAILED/FAILURE**: 执行失败
+* **CANCELLED/REVOKED**: 被取消
+* **REJECTED**: 被拒绝
+* **IGNORED**: 被忽略
+
+### 任务管理API
+
+系统提供完整的任务管理REST API：
+
+* 获取任务列表（支持分页和筛选）
+* 获取任务详情
+* 取消任务（单个或批量）
+* 清理旧任务记录
+
+### 使用示例
+
+#### 取消任务
 
 ```bash
-curl -X PUT "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/chunking-config" \
+# 取消单个任务
+curl -X DELETE "http://localhost:8000/api/v1/tasks/{task_id}?force=false&recursive=false" \
+  -H "Authorization: Bearer {your_token}"
+
+# 批量取消任务
+curl -X POST "http://localhost:8000/api/v1/tasks/cancel-batch" \
   -H "Authorization: Bearer {your_token}" \
   -H "Content-Type: application/json" \
   -d '{
-    "chunk_size": 1000,
-    "chunk_overlap": 200,
-    "chunking_strategy": "paragraph",
-    "rechunk_documents": true,
-    "custom_separators": ["\\n\\n", "\\n", ". "]
+    "task_ids": ["task-id-1", "task-id-2", "task-id-3"],
+    "force": false
   }'
 ```
 
-### 获取可用分块策略
+#### 查询任务状态
 
 ```bash
-curl -X GET "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/chunking-strategies" \
+# 获取任务详情
+curl -X GET "http://localhost:8000/api/v1/tasks/{task_id}" \
   -H "Authorization: Bearer {your_token}"
-```
 
-### 重建知识库索引
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/knowledge-bases/{kb_id}/rebuild-index" \
+# 获取任务列表（带筛选）
+curl -X GET "http://localhost:8000/api/v1/tasks/?status=RUNNING&limit=20&offset=0" \
   -H "Authorization: Bearer {your_token}"
 ```
 
