@@ -10,7 +10,7 @@ from app.schemas.schemas import (
 from app.services.vector_store import (
     create_knowledge_base as create_kb,
     list_knowledge_bases as list_kbs,
-    get_knowledge_base_info as get_kb_info,
+    get_knowledge_base as get_kb_info,
     delete_knowledge_base as delete_kb,
 )
 # Optional: Import dependency to verify connection
