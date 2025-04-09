@@ -17,6 +17,14 @@ from app.models.database import Base, SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# 知识库与文档的多对多关联表
+knowledge_base_documents = Table(
+    "knowledge_base_documents",
+    Base.metadata,
+    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
+    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+)
+
 # 文档状态枚举
 class DocumentStatus(str, Enum):
     PENDING = "pending"       # 等待处理

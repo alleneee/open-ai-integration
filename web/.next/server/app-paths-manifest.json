@@ -1,0 +1,5 @@
+{
+  "/workflows/[id]/page": "app/workflows/[id]/page.js",
+  "/knowledge/page": "app/knowledge/page.js",
+  "/knowledge/create/page": "app/knowledge/create/page.js"
+}

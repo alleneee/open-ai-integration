@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from contextlib import asynccontextmanager
+from fastapi.middleware.gzip import GZipMiddleware
 
 # Updated import paths
 from app.core.config import settings
@@ -85,6 +86,30 @@ app = FastAPI(
 register_exception_handlers(app)
 
 # --- Middleware ---
+# 添加Gzip压缩中间件
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# --- 添加自定义API路由处理中间件 ---
+@app.middleware("http")
+async def api_route_middleware(request: Request, call_next):
+    path = request.url.path
+    
+    # 如果是API路由，正常处理
+    if path.startswith(settings.api_v1_prefix):
+        logger.debug(f"处理API请求: {path}")
+        return await call_next(request)
+    
+    # 如果是根路径或文档路径，正常处理
+    if path == "/" or path.startswith(f"{settings.api_v1_prefix}/docs") or path.startswith(f"{settings.api_v1_prefix}/redoc") or path == "/health":
+        return await call_next(request)
+    
+    # 如果不是API请求，返回404，告知前端路由不处理
+    logger.warning(f"非API路径请求: {path} - 返回404")
+    return JSONResponse(
+        status_code=404, 
+        content={"detail": "此服务器仅处理API请求"}
+    )
+    
 # CORS
 if settings.cors_origins:
     # Convert comma-separated string in env var to list if needed

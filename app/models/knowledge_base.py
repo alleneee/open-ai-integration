@@ -16,6 +16,25 @@ from pydantic import BaseModel, Field, validator
 from app.models.database import Base
 from app.models.document import Document, DocumentResponse
 
+# 添加 ChunkingConfig 类
+class ChunkingConfig(BaseModel):
+    """文本分块配置"""
+    chunk_size: int = Field(1000, ge=50, le=4000, description="分块大小")
+    chunk_overlap: int = Field(200, ge=0, le=500, description="分块重叠大小")
+    chunking_strategy: str = Field("recursive", description="分块策略")
+    
+    class Config:
+        from_attributes = True
+
+# 添加 KnowledgeBaseDocumentAdd 类
+class KnowledgeBaseDocumentAdd(BaseModel):
+    """知识库添加文档的请求模型"""
+    document_ids: List[str] = Field(..., description="文档ID列表")
+    chunking_config: Optional[ChunkingConfig] = None
+    
+    class Config:
+        from_attributes = True
+
 class ChunkingStrategy(str, Enum):
     """文本分块策略枚举"""
     RECURSIVE = "recursive"
