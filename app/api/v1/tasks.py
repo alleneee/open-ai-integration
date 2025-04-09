@@ -6,14 +6,16 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Path, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from celery.result import AsyncResult
 
-from app.api.deps import get_current_user, get_current_active_user, get_db, is_admin
+from app.task.celery_app import celery_app
+from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.models.task import TaskStatusResponse, TaskStatusCreate, TaskStatusUpdate, TaskState, TaskStatusFilterParams
 from app.services.task_manager import get_task_manager, TaskManager
 from app.task.task_cancellation import cancel_task, cancel_child_tasks
 
-router = APIRouter()
+router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
 
 @router.get(
@@ -30,7 +32,7 @@ async def list_tasks(
     to_date: Optional[datetime] = Query(None, description="结束日期"),
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
@@ -76,7 +78,7 @@ async def count_tasks(
     user_id: Optional[str] = Query(None, description="用户ID"),
     from_date: Optional[datetime] = Query(None, description="开始日期"),
     to_date: Optional[datetime] = Query(None, description="结束日期"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
@@ -107,7 +109,7 @@ async def count_tasks(
 )
 async def get_task(
     task_id: str = Path(..., description="任务ID"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
@@ -145,7 +147,7 @@ async def cancel_task_endpoint(
     task_id: str = Path(..., description="任务ID"),
     force: bool = Query(False, description="是否强制取消，针对已经开始运行的任务"),
     recursive: bool = Query(False, description="是否级联取消子任务"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
@@ -209,7 +211,7 @@ async def cancel_task_endpoint(
 async def cancel_task_batch(
     task_ids: List[str],
     force: bool = Query(False, description="是否强制取消，针对已经开始运行的任务"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
@@ -299,7 +301,7 @@ async def cancel_task_batch(
 )
 async def cleanup_old_tasks(
     days: int = Path(..., ge=1, le=365, description="保留天数"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """

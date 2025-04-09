@@ -16,11 +16,19 @@ from app.models.knowledge_base import (
 )
 from app.models.document import Document
 from app.services.document_processor import document_processor
-from app.db.session import SessionLocal
+from app.models.database import SessionLocal
 import asyncio
 import logging
 from datetime import datetime
 import json
+from app.services.vector_store import (
+    create_knowledge_base as create_milvus_kb, 
+    get_knowledge_base as get_milvus_kb, 
+    delete_knowledge_base as delete_milvus_kb,
+    add_documents,
+    list_knowledge_bases as list_milvus_kbs
+)
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +431,7 @@ class KnowledgeBaseService:
         Returns:
             重建成功返回True，否则返回False
         """
-        from app.db.session import SessionLocal
+        from app.models.database import SessionLocal
         from app.services.document_processor import document_processor
         from app.services.document_chunker import document_chunker
         from app.services.vector_store import vector_store_service

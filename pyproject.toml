@@ -32,6 +32,12 @@ langchain-cohere = "^0.3.0" # 更新到与LangChain 0.3.x兼容的版本
 rank-bm25 = "^0.2.2" # Added for BM25 Hybrid Search
 celery = {extras = ["redis"], version = "^5.5.1"} # Added Celery with Redis extras
 redis = "^5.0.4" # Added Redis client library
+fastapi-cache2 = "^0.2.2"
+python-jose = "^3.4.0"
+pymysql = "^1.1.1"
+pyjwt = "^2.10.1"
+passlib = "^1.7.4"
+langchain-text-splitters = "^0.3.8"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"

@@ -44,7 +44,7 @@ class TaskStatus(Base):
     progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="任务元数据，JSON格式")
+    task_metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="任务元数据，JSON格式")
     retries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
@@ -71,7 +71,7 @@ class TaskStatusBase(BaseModel):
     task_type: str
     status: TaskState
     progress: float = 0.0
-    metadata: Optional[Dict[str, Any]] = None
+    task_metadata: Optional[Dict[str, Any]] = None
     retries: int = 0
     max_retries: int = 3
 
@@ -88,7 +88,7 @@ class TaskStatusUpdate(BaseModel):
     progress: Optional[float] = None
     result: Optional[str] = None
     error: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    task_metadata: Optional[Dict[str, Any]] = None
     retries: Optional[int] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

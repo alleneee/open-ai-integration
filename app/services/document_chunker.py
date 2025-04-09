@@ -12,14 +12,19 @@ import mimetypes
 from pathlib import Path
 from functools import lru_cache
 
+# Langchain core and common text splitters
 from langchain.text_splitter import (
     RecursiveCharacterTextSplitter,
     MarkdownTextSplitter,
     TokenTextSplitter,
     CharacterTextSplitter,
     PythonCodeTextSplitter,
-    JavascriptTextSplitter
 )
+# Import specific code splitter from its new location
+# Try importing from the 'code' submodule
+# Remove the problematic import
+# from langchain_text_splitters.code import JavascriptTextSplitter
+
 from langchain.document_loaders import (
     PyPDFLoader,
     TextLoader,
@@ -40,10 +45,11 @@ class DocumentChunker:
     
     _code_file_extensions = {
         '.py': PythonCodeTextSplitter(),
-        '.js': JavascriptTextSplitter(),
-        '.ts': JavascriptTextSplitter(),
-        '.jsx': JavascriptTextSplitter(),
-        '.tsx': JavascriptTextSplitter()
+        # Removed JavascriptTextSplitter entries
+        # '.js': JavascriptTextSplitter(),
+        # '.ts': JavascriptTextSplitter(),
+        # '.jsx': JavascriptTextSplitter(),
+        # '.tsx': JavascriptTextSplitter()
     }
     
     _document_loaders = {
@@ -200,7 +206,7 @@ class DocumentChunker:
             # PDF通常按页面分块更好
             chunking_strategy = "recursive"
             chunk_size = max(chunk_size, 1500)  # PDF页面通常较大
-        elif file_extension in ['.doc', '.docx']:
+        elif file_extension in ['.docx']:
             # Word文档适合段落分块
             chunking_strategy = "paragraph"
         elif file_extension in ['.csv', '.xlsx', '.xls']:
@@ -277,7 +283,7 @@ class DocumentChunker:
             return TextLoader
         elif file_extension == '.pdf':
             return PyPDFLoader
-        elif file_extension in ['.docx', '.doc']:
+        elif file_extension in ['.docx']:
             return Docx2txtLoader
         elif file_extension == '.csv':
             return CSVLoader

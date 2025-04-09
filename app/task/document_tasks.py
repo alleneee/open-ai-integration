@@ -12,10 +12,14 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.services.parser import parse_file_from_path_and_split
-from app.services.vector_store import add_documents_to_index, get_vector_store
+from app.services.document_chunker import document_chunker
+from app.services.document_processor import document_processor
+from app.services.vector_store import add_documents
 from app.services.rag import perform_rag_query
 from app.models.document import DocumentStatus, DocumentModel, SegmentModel
+from app.task.celery_app import celery_app
 from app.models.database import SessionLocal
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +69,7 @@ def document_indexing_task(self, document_id: str, file_path: str, filename: str
         
         # 添加到向量存储
         try:
-            add_documents_to_index(
+            add_documents(
                 documents=[chunk.page_content for chunk in document_chunks],
                 metadatas=metadatas,
                 collection_name=collection_name

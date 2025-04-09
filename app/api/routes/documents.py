@@ -19,12 +19,18 @@ from app.models.document import (
     DocumentStatus, Document, get_document_by_id,
     list_documents, create_document
 )
+# The following import block is removed as these schemas are not defined in schemas.py
+# from app.schemas.schemas import (
+#     DocumentUploadResponse, DocumentQueryRequest, 
+#     DocumentQueryResponse, SegmentResponse 
+# )
 from app.services.parser import parse_uploaded_file_and_split
-from app.services.vector_store import get_vector_store
+from app.services.vector_store import get_retriever
 from app.task.document_tasks import (
     document_indexing_task, retry_document_indexing_task,
     batch_delete_document_task
 )
+from app.services.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
 
