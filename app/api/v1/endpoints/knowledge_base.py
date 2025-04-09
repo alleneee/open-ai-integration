@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
 import logging
 
-from app.deps import get_db
+from app.api.deps import get_db
 from app.models.knowledge_base import (
     KnowledgeBase, 
     KnowledgeBaseCreate, 

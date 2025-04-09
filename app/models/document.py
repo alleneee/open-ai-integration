@@ -234,17 +234,15 @@ class DocumentResponse(BaseModel):
     """文档响应模型"""
     id: str
     filename: str
-    file_type: Optional[str] = None
-    status: DocumentStatus
+    status: str
     error_message: Optional[str] = None
-    segment_count: int
-    word_count: int = 0
-    token_count: int = 0
-    enabled: bool = True
-    archived: bool = False
-    processing_time: Optional[float] = None
+    segment_count: int = 0
+    word_count: Optional[int] = None
+    token_count: Optional[int] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
     created_at: datetime.datetime
-    updated_at: datetime.datetime
+    updated_at: Optional[datetime.datetime] = None
     
     class Config:
         from_attributes = True
@@ -253,6 +251,9 @@ class DocumentListResponse(BaseModel):
     """文档列表响应模型"""
     items: List[DocumentResponse]
     total: int
+    
+    class Config:
+        from_attributes = True
 
 class DocumentBriefSchema(BaseModel):
     """文档简要信息模型，用于知识库关联展示"""
@@ -309,191 +310,6 @@ class ChildChunkResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# 数据库操作函数
-def create_document(document_data: Dict[str, Any], db: Optional[Session] = None) -> Document:
-    """创建文档记录"""
-    close_session = False
-    if db is None:
-        db = SessionLocal()
-        close_session = True
-    
-    try:
-        document = Document(**document_data)
-        db.add(document)
-        db.commit()
-        db.refresh(document)
-        return document
-    except Exception as e:
-        db.rollback()
-        logger.error(f"创建文档记录失败: {str(e)}")
-        raise
-    finally:
-        if close_session:
-            db.close()
-
-def get_document_by_id(document_id: str, db: Optional[Session] = None) -> Optional[Document]:
-    """通过ID获取文档"""
-    close_session = False
-    if db is None:
-        db = SessionLocal()
-        close_session = True
-    
-    try:
-        return db.query(Document).filter(Document.id == document_id).first()
-    finally:
-        if close_session:
-            db.close()
-
-def update_document_status(
-    document_id: str, 
-    status: DocumentStatus, 
-    error_message: Optional[str] = None, 
-    segment_count: Optional[int] = None, 
-    word_count: Optional[int] = None,
-    token_count: Optional[int] = None,
-    db: Optional[Session] = None
-) -> bool:
-    """更新文档状态"""
-    close_session = False
-    if db is None:
-        db = SessionLocal()
-        close_session = True
-    
-    try:
-        document = db.query(Document).filter(Document.id == document_id).first()
-        if not document:
-            return False
-        
-        document.status = status
-        
-        # 更新时间戳
-        now = datetime.datetime.utcnow()
-        if status == DocumentStatus.PROCESSING and not document.processing_started_at:
-            document.processing_started_at = now
-        elif status == DocumentStatus.PARSING and not document.parsing_started_at:
-            document.parsing_started_at = now
-        elif status == DocumentStatus.SPLITTING and document.parsing_started_at and not document.parsing_completed_at:
-            document.parsing_completed_at = now
-            document.splitting_started_at = now
-        elif status == DocumentStatus.INDEXING and document.splitting_started_at and not document.splitting_completed_at:
-            document.splitting_completed_at = now
-            document.indexing_started_at = now
-        elif status == DocumentStatus.COMPLETED and document.indexing_started_at and not document.indexing_completed_at:
-            document.indexing_completed_at = now
-            document.processing_completed_at = now
-        elif status == DocumentStatus.ERROR:
-            document.processing_completed_at = now
-        
-        if error_message is not None:
-            document.error_message = error_message
-        if segment_count is not None:
-            document.segment_count = segment_count
-        if word_count is not None:
-            document.word_count = word_count
-        if token_count is not None:
-            document.token_count = token_count
-        
-        db.commit()
-        return True
-    except Exception as e:
-        db.rollback()
-        logger.error(f"更新文档状态失败: {str(e)}")
-        return False
-    finally:
-        if close_session:
-            db.close()
-
-def create_segment(segment_data: Dict[str, Any], db: Optional[Session] = None) -> Segment:
-    """创建段落记录"""
-    close_session = False
-    if db is None:
-        db = SessionLocal()
-        close_session = True
-    
-    try:
-        if "meta_data" in segment_data and not isinstance(segment_data["meta_data"], str):
-            segment_data["meta_data"] = json.dumps(segment_data["meta_data"])
-            
-        segment = Segment(**segment_data)
-        db.add(segment)
-        db.commit()
-        db.refresh(segment)
-        return segment
-    except Exception as e:
-        db.rollback()
-        logger.error(f"创建段落记录失败: {str(e)}")
-        raise
-    finally:
-        if close_session:
-            db.close()
-
-def update_segment(segment_id: str, update_data: Dict[str, Any], db: Optional[Session] = None) -> Optional[Segment]:
-    """更新段落记录"""
-    close_session = False
-    if db is None:
-        db = SessionLocal()
-        close_session = True
-    
-    try:
-        segment = db.query(Segment).filter(Segment.id == segment_id).first()
-        if not segment:
-            return None
-        
-        if "meta_data" in update_data and not isinstance(update_data["meta_data"], str):
-            update_data["meta_data"] = json.dumps(update_data["meta_data"])
-            
-        for key, value in update_data.items():
-            setattr(segment, key, value)
-        
-        db.commit()
-        db.refresh(segment)
-        return segment
-    except Exception as e:
-        db.rollback()
-        logger.error(f"更新段落记录失败: {str(e)}")
-        return None
-    finally:
-        if close_session:
-            db.close()
-
-def generate_id():
-    """生成唯一ID"""
-    return str(uuid.uuid4())
-
-# 知识库与文档关联表
-knowledge_base_documents = Table(
-    "knowledge_base_documents",
-    Base.metadata,
-    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
-    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
-)
-
-class DocumentCreate(BaseModel):
-    """文档创建请求模型"""
-    filename: str = Field(..., description="文件名")
-    file_path: str = Field(..., description="文件路径")
-    file_type: str = Field(..., description="文件类型")
-    file_size: int = Field(..., description="文件大小(字节)")
-    content: Optional[str] = Field(None, description="文本内容")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="文件元数据")
-    
-    class Config:
-        from_attributes = True
-
-class DocumentUpdate(BaseModel):
-    """文档更新请求模型"""
-    filename: Optional[str] = Field(None, description="文件名")
-    file_path: Optional[str] = Field(None, description="文件路径")
-    file_type: Optional[str] = Field(None, description="文件类型")
-    file_size: Optional[int] = Field(None, description="文件大小(字节)")
-    content: Optional[str] = Field(None, description="文本内容")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="文件元数据")
-    processed: Optional[bool] = Field(None, description="是否已处理")
-    error: Optional[str] = Field(None, description="处理错误信息")
-    
-    class Config:
-        from_attributes = True
-
 class DocumentSchema(BaseModel):
     """文档响应模型"""
     id: str
@@ -506,8 +322,64 @@ class DocumentSchema(BaseModel):
     processed: bool
     error: Optional[str] = None
     created_by: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
     
     class Config:
         from_attributes = True
+
+def list_documents(
+    tenant_id: str, 
+    collection_name: Optional[str] = None,
+    status: Optional[DocumentStatus] = None,
+    skip: int = 0, 
+    limit: int = 100,
+    db: Session = None
+) -> Tuple[List[Document], int]:
+    """
+    列出文档，支持分页和筛选
+    
+    Args:
+        tenant_id: 租户ID
+        collection_name: 知识库名称，可选
+        status: 文档状态，可选
+        skip: 跳过数量，用于分页
+        limit: 返回数量限制
+        db: 数据库会话
+        
+    Returns:
+        Tuple[List[Document], int]: 文档列表和总数
+    """
+    query = db.query(Document).filter(Document.tenant_id == tenant_id)
+    
+    if collection_name:
+        query = query.filter(Document.collection_name == collection_name)
+    
+    if status:
+        query = query.filter(Document.status == status)
+    
+    total = query.count()
+    documents = query.order_by(Document.created_at.desc()).offset(skip).limit(limit).all()
+    
+    return documents, total
+
+def get_document_by_id(document_id: str, db: Session) -> Optional[Document]:
+    """根据ID获取文档"""
+    return db.query(Document).filter(Document.id == document_id).first()
+
+def create_document(document_data: dict, db: Session) -> Document:
+    """
+    创建文档记录
+    
+    Args:
+        document_data: 文档数据字典
+        db: 数据库会话
+        
+    Returns:
+        Document: 创建的文档对象
+    """
+    document = Document(**document_data)
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return document

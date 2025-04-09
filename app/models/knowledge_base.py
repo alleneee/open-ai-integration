@@ -11,18 +11,10 @@ import json
 from sqlalchemy import Column, String, DateTime, ForeignKey, Table, Boolean, Integer, Text, Enum as SQLAlchemyEnum, JSON
 from sqlalchemy.orm import relationship, mapped_column, Mapped
 from sqlalchemy.dialects.postgresql import JSONB
+from pydantic import BaseModel, Field, validator
 
 from app.models.database import Base
 from app.models.document import Document, DocumentResponse
-
-# 知识库与文档的多对多关联表
-knowledge_base_document = Table(
-    "knowledge_base_document",
-    Base.metadata,
-    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
-    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
-)
-
 
 class ChunkingStrategy(str, Enum):
     """文本分块策略枚举"""
@@ -44,6 +36,40 @@ class RetrievalMethod(str, Enum):
     SEMANTIC_SEARCH = "semantic_search"  # 语义检索
     KEYWORD_SEARCH = "keyword_search"    # 关键词检索
     HYBRID_SEARCH = "hybrid_search"      # 混合检索
+
+# 知识库表定义
+class KnowledgeBaseDB(Base):
+    """知识库数据库模型"""
+    __tablename__ = "knowledge_bases"
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    meta_data = Column(JSON, nullable=True)
+    
+    tenant_id = Column(String(36), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    chunk_size = Column(Integer, default=1000, nullable=False)
+    chunk_overlap = Column(Integer, default=200, nullable=False)
+    chunking_strategy = Column(SQLAlchemyEnum(ChunkingStrategy), default=ChunkingStrategy.RECURSIVE, nullable=False)
+    
+    created_by = Column(String(36), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关联文档
+    documents = relationship("Document", secondary="knowledge_base_document", back_populates="knowledge_bases")
+    
+    built_in_field_enabled = Column(Boolean, default=False, nullable=False)
+
+# 知识库与文档的多对多关联表
+knowledge_base_document = Table(
+    "knowledge_base_document",
+    Base.metadata,
+    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
+    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+)
 
 
 class KnowledgeBaseBase(BaseModel):
@@ -131,14 +157,11 @@ class KnowledgeBasePermission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     
     # 关系定义
-    knowledge_base = relationship("KnowledgeBase")
+    knowledge_base = relationship("KnowledgeBaseDB")
     user = relationship("User")
 
 
 # Pydantic 模型用于 API 请求和响应
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional
-from datetime import datetime
 
 
 class KnowledgeBaseSchema(KnowledgeBaseBase):
@@ -196,6 +219,15 @@ class KnowledgeBaseWithStats(KnowledgeBaseResponse):
         }
     )
     embedding_available: bool = True
+
+
+class KnowledgeBaseDetail(KnowledgeBaseWithStats):
+    """知识库详细信息模型，包含更多信息"""
+    documents: List[DocumentBriefSchema] = []
+    retrieval_model: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        from_attributes = True
 
 
 class KnowledgeBaseList(BaseModel):
