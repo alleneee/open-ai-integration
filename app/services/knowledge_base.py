@@ -2,8 +2,9 @@
 知识库服务
 处理知识库的创建、查询、更新和文档管理等业务逻辑
 """
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from fastapi import HTTPException, status, BackgroundTasks
 
 from app.models.knowledge_base import (
@@ -12,25 +13,39 @@ from app.models.knowledge_base import (
     KnowledgeBaseUpdate,
     KnowledgeBaseSchema,
     KnowledgeBaseDetailSchema,
-    ChunkingConfig
+    ChunkingConfig,
+    DatasetPermissionEnum,
+    KnowledgeBasePermission
 )
-from app.models.document import Document
+from app.models.document import Document, DocumentStatus, Segment, knowledge_base_documents
 from app.services.document_processor import document_processor
-from app.models.database import SessionLocal
+from app.models.database import SessionLocal, db
 import asyncio
 import logging
 from datetime import datetime
 import json
 from app.services.vector_store import (
-    create_knowledge_base as create_milvus_kb, 
-    get_knowledge_base as get_milvus_kb, 
-    delete_knowledge_base as delete_milvus_kb,
-    add_documents,
-    list_knowledge_bases as list_milvus_kbs
+    create_collection,
+    check_collection_exists,
+    delete_collection,
+    add_documents_to_knowledge_base as vector_add_documents,
+    get_knowledge_base_stats,
+    sync_knowledge_base_metadata,
+    get_all_collections,
+    ensure_collection_exists
 )
 from sqlalchemy.exc import IntegrityError
+from app.models.user import User
+from app.db.crud import create_item, get_items, get_item, update_item, delete_item
+from app.db.models import KnowledgeBase as KnowledgeBaseDB, KnowledgeBaseDocument as KnowledgeBaseDocumentDB
+from app.models.knowledge_base import KnowledgeBaseStats
+import uuid
 
 logger = logging.getLogger(__name__)
+
+# 知识库表名
+KNOWLEDGE_BASE_TABLE = "knowledge_bases"
+KNOWLEDGE_BASE_DOCUMENT_TABLE = "knowledge_base_documents"
 
 class KnowledgeBaseService:
     """知识库服务类"""
@@ -63,7 +78,7 @@ class KnowledgeBaseService:
                 detail="知识库名称已存在"
             )
         
-        # 创建新知识库
+        # 创建新知识库数据库记录
         kb_data = kb_create.model_dump()
         kb_data["created_by"] = user_id
         
@@ -72,6 +87,31 @@ class KnowledgeBaseService:
         db.commit()
         db.refresh(new_kb)
         
+        # 创建向量存储集合
+        collection_created = ensure_collection_exists(new_kb.id)
+        if not collection_created:
+            # 如果向量存储集合创建失败，回滚数据库事务
+            logger.error(f"创建向量存储集合失败: {new_kb.id}")
+            db.delete(new_kb)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="创建向量存储集合失败"
+            )
+            
+        # 同步知识库元数据到向量存储
+        metadata = {
+            "name": new_kb.name,
+            "description": new_kb.description,
+            "embedding_model": new_kb.embedding_model,
+            "chunk_size": new_kb.chunk_size,
+            "chunk_overlap": new_kb.chunk_overlap,
+            "chunking_strategy": new_kb.chunking_strategy.value if hasattr(new_kb.chunking_strategy, 'value') else new_kb.chunking_strategy,
+            "created_at": new_kb.created_at.isoformat(),
+            "created_by": new_kb.created_by
+        }
+        sync_knowledge_base_metadata(new_kb.id, metadata)
+        
         return new_kb
     
     @staticmethod
@@ -79,8 +119,10 @@ class KnowledgeBaseService:
         db: Session, 
         skip: int = 0, 
         limit: int = 100, 
-        user_id: Optional[str] = None
-    ) -> List[KnowledgeBase]:
+        user_id: Optional[str] = None,
+        search: Optional[str] = None,
+        include_all: bool = False
+    ) -> Tuple[List[KnowledgeBase], int]:
         """
         获取知识库列表，可选按创建者筛选
         
@@ -88,17 +130,40 @@ class KnowledgeBaseService:
             db: 数据库会话
             skip: 分页起始位置
             limit: 分页大小
-            user_id: 可选的创建者用户ID筛选
+            user_id: 可选的用户ID，用于过滤权限
+            search: 搜索关键词
+            include_all: 是否包括所有知识库（管理员用）
             
         Returns:
-            知识库对象列表
+            知识库对象列表和总数
         """
         query = db.query(KnowledgeBase)
         
-        if user_id:
-            query = query.filter(KnowledgeBase.created_by == user_id)
+        # 如果提供了用户ID且不是获取所有知识库
+        if user_id and not include_all:
+            # 基于权限获取知识库列表
+            permissions_query = db.query(KnowledgeBasePermission.knowledge_base_id).filter(
+                KnowledgeBasePermission.user_id == user_id
+            )
+            
+            permitted_kb_ids = [p[0] for p in permissions_query.all()]
+            
+            # 构建查询：包括用户创建的、有权限的和公开的知识库
+            query = query.filter(
+                (KnowledgeBase.created_by == user_id) |  # 用户创建的
+                (KnowledgeBase.permission == DatasetPermissionEnum.ALL_TEAM) |  # 团队公开的
+                (KnowledgeBase.id.in_(permitted_kb_ids))  # 用户有特定权限的
+            )
         
-        return query.offset(skip).limit(limit).all()
+        # 如果有搜索词，进行模糊匹配
+        if search:
+            query = query.filter(KnowledgeBase.name.ilike(f'%{search}%'))
+        
+        # 获取总数和分页数据
+        total = query.count()
+        knowledge_bases = query.order_by(KnowledgeBase.created_at.desc()).offset(skip).limit(limit).all()
+        
+        return knowledge_bases, total
     
     @staticmethod
     def get_knowledge_base(db: Session, kb_id: str) -> Optional[KnowledgeBase]:
@@ -112,7 +177,11 @@ class KnowledgeBaseService:
         Returns:
             知识库对象，未找到则返回None
         """
-        return db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if kb:
+            # 添加向量存储统计信息
+            kb.vector_stats = get_knowledge_base_stats(kb_id)
+        return kb
     
     @staticmethod
     def get_knowledge_base_with_documents(db: Session, kb_id: str) -> Optional[KnowledgeBase]:
@@ -127,9 +196,22 @@ class KnowledgeBaseService:
             包含文档关联的知识库对象，未找到则返回None
         """
         # 使用joined eager loading加载文档关联
-        return db.query(KnowledgeBase).filter(
+        kb = db.query(KnowledgeBase).filter(
             KnowledgeBase.id == kb_id
         ).first()
+        
+        if kb:
+            # 添加向量存储统计信息
+            kb.vector_stats = get_knowledge_base_stats(kb_id)
+            
+            # 获取文档完成处理的数量
+            completed_docs = 0
+            for doc in kb.documents:
+                if doc.status == DocumentStatus.COMPLETED:
+                    completed_docs += 1
+            kb.completed_docs_count = completed_docs
+            
+        return kb
     
     @staticmethod
     def update_knowledge_base(
@@ -161,6 +243,18 @@ class KnowledgeBaseService:
         db.commit()
         db.refresh(kb)
         
+        # 同步知识库元数据到向量存储
+        metadata = {
+            "name": kb.name,
+            "description": kb.description,
+            "embedding_model": kb.embedding_model,
+            "chunk_size": kb.chunk_size,
+            "chunk_overlap": kb.chunk_overlap,
+            "chunking_strategy": kb.chunking_strategy.value if hasattr(kb.chunking_strategy, 'value') else kb.chunking_strategy,
+            "updated_at": kb.updated_at.isoformat()
+        }
+        sync_knowledge_base_metadata(kb.id, metadata)
+        
         return kb
     
     @staticmethod
@@ -180,10 +274,176 @@ class KnowledgeBaseService:
         if not kb:
             return False
         
+        # 首先删除向量存储集合
+        vector_deleted = delete_collection(kb_id)
+        if not vector_deleted:
+            logger.warning(f"删除向量存储集合 {kb_id} 失败")
+        
+        # 删除知识库权限记录
+        db.query(KnowledgeBasePermission).filter(
+            KnowledgeBasePermission.knowledge_base_id == kb_id
+        ).delete(synchronize_session=False)
+        
+        # 然后删除数据库记录
         db.delete(kb)
         db.commit()
         
         return True
+    
+    @staticmethod
+    def check_knowledge_base_permission(
+        db: Session, 
+        kb_id: str, 
+        user_id: str
+    ) -> bool:
+        """
+        检查用户是否有权限访问知识库
+        
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            user_id: 用户ID
+            
+        Returns:
+            用户是否有权限访问
+        """
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        
+        if not kb:
+            return False
+        
+        # 如果用户是知识库创建者，总是有权限
+        if kb.created_by == user_id:
+            return True
+        
+        # 如果知识库对团队所有成员开放，有权限
+        if kb.permission == DatasetPermissionEnum.ALL_TEAM:
+            return True
+        
+        # 如果知识库对部分成员开放，检查用户是否在权限列表中
+        if kb.permission == DatasetPermissionEnum.PARTIAL_TEAM:
+            permission = db.query(KnowledgeBasePermission).filter(
+                KnowledgeBasePermission.knowledge_base_id == kb_id,
+                KnowledgeBasePermission.user_id == user_id
+            ).first()
+            
+            return permission is not None
+        
+        # 如果知识库是私有的（只有创建者可见），没有权限
+        return False
+    
+    @staticmethod
+    def grant_knowledge_base_permission(
+        db: Session,
+        kb_id: str,
+        user_id: str
+    ) -> bool:
+        """
+        为用户授予知识库访问权限
+        
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            user_id: 用户ID
+            
+        Returns:
+            操作是否成功
+        """
+        # 检查知识库是否存在
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            return False
+        
+        # 检查权限是否已存在
+        existing_permission = db.query(KnowledgeBasePermission).filter(
+            KnowledgeBasePermission.knowledge_base_id == kb_id,
+            KnowledgeBasePermission.user_id == user_id
+        ).first()
+        
+        if existing_permission:
+            # 权限已存在
+            return True
+        
+        # 添加新的权限记录
+        new_permission = KnowledgeBasePermission(
+            knowledge_base_id=kb_id,
+            user_id=user_id
+        )
+        
+        try:
+            db.add(new_permission)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logger.error(f"授予知识库权限失败: {str(e)}")
+            return False
+    
+    @staticmethod
+    def revoke_knowledge_base_permission(
+        db: Session,
+        kb_id: str,
+        user_id: str
+    ) -> bool:
+        """
+        撤销用户的知识库访问权限
+        
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            user_id: 用户ID
+            
+        Returns:
+            操作是否成功
+        """
+        try:
+            # 删除权限记录
+            result = db.query(KnowledgeBasePermission).filter(
+                KnowledgeBasePermission.knowledge_base_id == kb_id,
+                KnowledgeBasePermission.user_id == user_id
+            ).delete(synchronize_session=False)
+            
+            db.commit()
+            return result > 0
+        except Exception as e:
+            db.rollback()
+            logger.error(f"撤销知识库权限失败: {str(e)}")
+            return False
+    
+    @staticmethod
+    def get_knowledge_base_permissions(
+        db: Session,
+        kb_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        获取知识库的权限列表
+        
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            
+        Returns:
+            权限用户列表
+        """
+        try:
+            # 获取权限记录
+            permissions = db.query(KnowledgeBasePermission).filter(
+                KnowledgeBasePermission.knowledge_base_id == kb_id
+            ).all()
+            
+            # 如果需要，可以在这里获取用户信息
+            result = []
+            for permission in permissions:
+                # 这里可以查询用户表获取更多信息
+                result.append({
+                    "user_id": permission.user_id,
+                    "created_at": permission.created_at
+                })
+            
+            return result
+        except Exception as e:
+            logger.error(f"获取知识库权限失败: {str(e)}")
+            return []
     
     @staticmethod
     def add_documents_to_knowledge_base(
@@ -202,10 +462,20 @@ class KnowledgeBaseService:
         Returns:
             更新后的知识库对象，未找到则返回None
         """
+        # 首先确保知识库存在于数据库中
         kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
-        
         if not kb:
-            return None
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"知识库 {kb_id} 不存在"
+            )
+        
+        # 然后确保向量存储集合存在
+        if not check_collection_exists(kb_id):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"知识库对应的向量存储集合 {kb_id} 不存在，请重建知识库"
+            )
         
         # 查询所有指定ID的文档
         documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
@@ -233,6 +503,9 @@ class KnowledgeBaseService:
         
         db.commit()
         db.refresh(kb)
+        
+        # 添加向量存储统计信息
+        kb.vector_stats = get_knowledge_base_stats(kb_id)
         
         return kb
     
@@ -530,3 +803,415 @@ class KnowledgeBaseService:
 
 # 创建知识库服务单例
 knowledge_base_service = KnowledgeBaseService()
+
+async def create_knowledge_base(kb_data: KnowledgeBaseCreate) -> KnowledgeBase:
+    """
+    创建新的知识库
+    
+    Args:
+        kb_data: 知识库创建数据
+        
+    Returns:
+        创建的知识库对象
+    """
+    # 检查是否已存在同名知识库
+    existing = await get_knowledge_base_by_name(kb_data.name)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"知识库 '{kb_data.name}' 已存在"
+        )
+    
+    # 创建知识库记录
+    kb_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    
+    kb_dict = kb_data.dict(exclude_unset=True)
+    kb_dict.update({
+        "id": kb_id,
+        "created_at": now,
+        "updated_at": now,
+        "document_count": 0
+    })
+    
+    try:
+        # 创建向量存储集合
+        ensure_collection_exists(kb_data.name)
+        
+        # 保存到数据库
+        await create_item(KNOWLEDGE_BASE_TABLE, kb_dict)
+        
+        return KnowledgeBase(**kb_dict)
+    except Exception as e:
+        logger.error(f"创建知识库失败: {str(e)}")
+        # 清理已创建的向量存储集合
+        try:
+            delete_collection(kb_data.name)
+        except Exception as cleanup_error:
+            logger.error(f"清理向量存储集合失败: {str(cleanup_error)}")
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建知识库失败: {str(e)}"
+        )
+
+
+async def get_all_knowledge_bases(
+    skip: int = 0, 
+    limit: int = 100,
+    created_by: Optional[str] = None
+) -> List[KnowledgeBase]:
+    """
+    获取所有知识库列表
+    
+    Args:
+        skip: 跳过的记录数
+        limit: 返回的最大记录数
+        created_by: 按创建者筛选
+        
+    Returns:
+        知识库列表
+    """
+    filters = {}
+    if created_by:
+        filters["created_by"] = created_by
+        
+    try:
+        kb_dicts = await get_items(
+            KNOWLEDGE_BASE_TABLE, 
+            filters=filters,
+            skip=skip, 
+            limit=limit
+        )
+        return [KnowledgeBase(**kb) for kb in kb_dicts]
+    except Exception as e:
+        logger.error(f"获取知识库列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取知识库列表失败: {str(e)}"
+        )
+
+
+async def get_knowledge_base(kb_id: str) -> KnowledgeBase:
+    """
+    通过ID获取知识库
+    
+    Args:
+        kb_id: 知识库ID
+        
+    Returns:
+        知识库对象
+    """
+    try:
+        kb_dict = await get_item(KNOWLEDGE_BASE_TABLE, kb_id)
+        if not kb_dict:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"知识库ID '{kb_id}' 不存在"
+            )
+        
+        return KnowledgeBase(**kb_dict)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取知识库失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取知识库失败: {str(e)}"
+        )
+
+
+async def get_knowledge_base_by_name(name: str) -> Optional[KnowledgeBase]:
+    """
+    通过名称获取知识库
+    
+    Args:
+        name: 知识库名称
+        
+    Returns:
+        知识库对象，如果不存在则返回None
+    """
+    try:
+        kb_dicts = await get_items(KNOWLEDGE_BASE_TABLE, filters={"name": name}, limit=1)
+        if not kb_dicts:
+            return None
+        
+        return KnowledgeBase(**kb_dicts[0])
+    except Exception as e:
+        logger.error(f"通过名称获取知识库失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"通过名称获取知识库失败: {str(e)}"
+        )
+
+
+async def update_knowledge_base(
+    kb_id: str, 
+    updates: Dict[str, Any]
+) -> KnowledgeBase:
+    """
+    更新知识库信息
+    
+    Args:
+        kb_id: 知识库ID
+        updates: 要更新的字段
+        
+    Returns:
+        更新后的知识库对象
+    """
+    # 检查知识库是否存在
+    kb = await get_knowledge_base(kb_id)
+    
+    # 准备更新数据
+    update_data = {**updates, "updated_at": datetime.utcnow()}
+    
+    try:
+        # 更新数据库记录
+        updated_kb = await update_item(KNOWLEDGE_BASE_TABLE, kb_id, update_data)
+        if not updated_kb:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"知识库ID '{kb_id}' 不存在"
+            )
+        
+        return KnowledgeBase(**updated_kb)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新知识库失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新知识库失败: {str(e)}"
+        )
+
+
+async def delete_knowledge_base(kb_id: str) -> bool:
+    """
+    删除知识库
+    
+    Args:
+        kb_id: 知识库ID
+        
+    Returns:
+        删除是否成功
+    """
+    # 检查知识库是否存在
+    kb = await get_knowledge_base(kb_id)
+    
+    try:
+        # 删除向量存储集合
+        delete_collection(kb.name)
+        
+        # 删除知识库与文档的关联关系
+        await delete_item(KNOWLEDGE_BASE_DOCUMENT_TABLE, filters={"kb_id": kb_id}, is_filter=True)
+        
+        # 删除知识库记录
+        result = await delete_item(KNOWLEDGE_BASE_TABLE, kb_id)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"知识库ID '{kb_id}' 不存在"
+            )
+        
+        return True
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除知识库失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除知识库失败: {str(e)}"
+        )
+
+
+async def get_kb_statistics(kb_id: str) -> KnowledgeBaseStats:
+    """
+    获取知识库统计信息
+    
+    Args:
+        kb_id: 知识库ID
+        
+    Returns:
+        知识库统计信息
+    """
+    # 获取知识库基本信息
+    kb = await get_knowledge_base(kb_id)
+    
+    try:
+        # 获取向量存储统计信息
+        vector_stats = get_knowledge_base_stats(kb.name)
+        
+        return KnowledgeBaseStats(
+            id=kb.id,
+            name=kb.name,
+            document_count=kb.document_count,
+            vector_count=vector_stats.get("count", 0),
+            last_updated=vector_stats.get("last_updated"),
+            metadata=kb.metadata
+        )
+    except Exception as e:
+        logger.error(f"获取知识库统计信息失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取知识库统计信息失败: {str(e)}"
+        )
+
+
+async def add_document_to_kb(
+    kb_id: str,
+    document_id: str,
+    document_content: str,
+    document_metadata: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    添加文档到知识库
+    
+    Args:
+        kb_id: 知识库ID
+        document_id: 文档ID
+        document_content: 文档内容
+        document_metadata: 文档元数据
+        
+    Returns:
+        添加是否成功
+    """
+    # 检查知识库是否存在
+    kb = await get_knowledge_base(kb_id)
+    
+    # 检查文档是否已添加到该知识库
+    existing_docs = await get_items(
+        KNOWLEDGE_BASE_DOCUMENT_TABLE, 
+        filters={"kb_id": kb_id, "document_id": document_id},
+        limit=1
+    )
+    
+    if existing_docs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"文档 '{document_id}' 已添加到知识库 '{kb.name}'"
+        )
+    
+    try:
+        # 添加文档到向量存储
+        add_documents_to_knowledge_base(
+            kb_name=kb.name,
+            documents=[document_content],
+            metadatas=[{"document_id": document_id, **(document_metadata or {})}]
+        )
+        
+        # 创建关联记录
+        now = datetime.utcnow()
+        await create_item(KNOWLEDGE_BASE_DOCUMENT_TABLE, {
+            "kb_id": kb_id,
+            "document_id": document_id,
+            "added_at": now
+        })
+        
+        # 更新知识库文档计数
+        await update_item(KNOWLEDGE_BASE_TABLE, kb_id, {
+            "document_count": kb.document_count + 1,
+            "updated_at": now
+        })
+        
+        return True
+    except Exception as e:
+        logger.error(f"添加文档到知识库失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"添加文档到知识库失败: {str(e)}"
+        )
+
+
+async def remove_document_from_kb(kb_id: str, document_id: str) -> bool:
+    """
+    从知识库中移除文档
+    
+    Args:
+        kb_id: 知识库ID
+        document_id: 文档ID
+        
+    Returns:
+        移除是否成功
+    """
+    # 检查知识库是否存在
+    kb = await get_knowledge_base(kb_id)
+    
+    # 检查文档是否已添加到该知识库
+    existing_docs = await get_items(
+        KNOWLEDGE_BASE_DOCUMENT_TABLE, 
+        filters={"kb_id": kb_id, "document_id": document_id},
+        limit=1
+    )
+    
+    if not existing_docs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"文档 '{document_id}' 未添加到知识库 '{kb.name}'"
+        )
+    
+    try:
+        # 删除关联记录
+        result = await delete_item(
+            KNOWLEDGE_BASE_DOCUMENT_TABLE, 
+            filters={"kb_id": kb_id, "document_id": document_id},
+            is_filter=True
+        )
+        
+        if result:
+            # 更新知识库文档计数
+            now = datetime.utcnow()
+            await update_item(KNOWLEDGE_BASE_TABLE, kb_id, {
+                "document_count": max(0, kb.document_count - 1),
+                "updated_at": now
+            })
+        
+        # 注意: 目前不支持从向量存储中删除特定文档的向量，
+        # 这将在未来版本中实现
+        
+        return True
+    except Exception as e:
+        logger.error(f"从知识库中移除文档失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"从知识库中移除文档失败: {str(e)}"
+        )
+
+
+async def get_kb_documents(
+    kb_id: str,
+    skip: int = 0,
+    limit: int = 100
+) -> List[Dict[str, Any]]:
+    """
+    获取知识库中的文档列表
+    
+    Args:
+        kb_id: 知识库ID
+        skip: 跳过的记录数
+        limit: 返回的最大记录数
+        
+    Returns:
+        文档列表
+    """
+    # 检查知识库是否存在
+    await get_knowledge_base(kb_id)
+    
+    try:
+        # 获取知识库文档关联记录
+        doc_records = await get_items(
+            KNOWLEDGE_BASE_DOCUMENT_TABLE,
+            filters={"kb_id": kb_id},
+            skip=skip,
+            limit=limit
+        )
+        
+        # 注意: 理想情况下，我们应该同时获取文档的详细信息
+        # 但由于文档服务可能在另一个模块中，这里只返回关联信息
+        
+        return doc_records
+    except Exception as e:
+        logger.error(f"获取知识库文档列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取知识库文档列表失败: {str(e)}"
+        )

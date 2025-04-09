@@ -48,8 +48,8 @@ class TaskManager:
             )
             
             # 如果有元数据，转为JSON字符串
-            if task_data.metadata:
-                task_status.metadata = json.dumps(task_data.metadata)
+            if task_data.task_metadata:
+                task_status.task_metadata = json.dumps(task_data.task_metadata)
             
             self.db.add(task_status)
             self.db.commit()
@@ -117,10 +117,10 @@ class TaskManager:
                 
             if update_data.completed_at is not None:
                 task_status.completed_at = update_data.completed_at
-                
+            
             # 更新元数据
-            if update_data.metadata is not None:
-                task_status.metadata = json.dumps(update_data.metadata)
+            if update_data.task_metadata is not None:
+                task_status.task_metadata = json.dumps(update_data.task_metadata)
             
             self.db.commit()
             self.db.refresh(task_status)

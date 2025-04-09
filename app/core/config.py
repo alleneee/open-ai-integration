@@ -192,19 +192,33 @@ class Settings(BaseSettings):
     def clean_env_values(cls, values):
         # 遍历所有字符串值，清理注释和引号
         for key, value in list(values.items()):
-            if isinstance(value, str) and '#' in value:
-                # 移除注释部分
-                cleaned_value = value.split('#')[0].strip()
-                # 如果有引号，移除它们
+            if isinstance(value, str):
+                # 变量需要清理的标志
+                needs_cleaning = False
+                cleaned_value = value
+                
+                # 处理注释部分
+                if '#' in cleaned_value:
+                    cleaned_value = cleaned_value.split('#')[0].strip()
+                    needs_cleaning = True
+                
+                # 处理引号，即使没有注释
                 if cleaned_value.startswith('"') and cleaned_value.endswith('"'):
                     cleaned_value = cleaned_value[1:-1]
+                    needs_cleaning = True
                 elif cleaned_value.startswith("'") and cleaned_value.endswith("'"):
                     cleaned_value = cleaned_value[1:-1]
+                    needs_cleaning = True
                 
-                values[key] = cleaned_value
-                if key in ['milvus_uri', 'embedding_provider', 'default_llm_provider']:
-                    logger.info(f"已清理环境变量 {key}: '{value}' -> '{cleaned_value}'")
-                
+                # 只有在实际进行了清理时才更新值
+                if needs_cleaning:
+                    values[key] = cleaned_value
+                    # 增加对Celery相关变量的日志输出
+                    important_keys = ['milvus_uri', 'embedding_provider', 'default_llm_provider', 
+                                     'celery_broker_url', 'celery_result_backend', 'broker_url', 'result_backend']
+                    if key.lower() in [k.lower() for k in important_keys]:
+                        logger.info(f"已清理环境变量 {key}: '{value}' -> '{cleaned_value}'")
+            
         return values
 
     class Config:

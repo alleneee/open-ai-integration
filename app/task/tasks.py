@@ -32,7 +32,7 @@ except ImportError as e:
         logging.info("[模拟] 解析文档")
         return [] # 返回空列表
         
-    def add_documents(*args, **kwargs):
+    def add_documents(documents=None, metadatas=None, docs=None, collection_name=None, auto_create_collection=False):
         logging.info("[模拟] 添加文档到向量库")
         return True
 
@@ -132,7 +132,12 @@ def process_document_batch(
             logger.info(f"[Task ID: {task_id}] 正在将 {len(all_docs)} 个文档块添加到 Collection '{collection_name}'...")
             # Ensure the target collection exists before adding
             # add_documents itself calls get_vector_store_instance which handles creation
-            add_documents(docs=all_docs, collection_name=collection_name)
+            add_documents(
+                documents=[doc.page_content for doc in all_docs],
+                metadatas=[doc.metadata for doc in all_docs],
+                collection_name=collection_name,
+                auto_create_collection=True  # 批处理任务允许自动创建集合
+            )
             logger.info(f"[Task ID: {task_id}] 成功将 {len(all_docs)} 个文档块添加到 Collection '{collection_name}'。")
             
             update_task_progress(task_id, 100.0)
