@@ -1,0 +1,494 @@
+/* 工作流编辑器基础样式 */
+.context-menu {
+    min-width: 160px;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* 节点动画效果 */
+.workflow-node-animation .react-flow__node {
+    transition: transform 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* 工作流运行动画 */
+.workflow-node-running .react-flow__node {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+    }
+
+    70% {
+        box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    }
+}
+
+/* 画布样式 */
+.workflow-canvas {
+    position: relative;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background-color: #f9fafb;
+    /* 柔和的背景色 */
+}
+
+/* 边样式 */
+.react-flow__edge-path {
+    transition: stroke 0.3s, stroke-width 0.3s;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+    stroke-dasharray: 5;
+    animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+    to {
+        stroke-dashoffset: -10;
+    }
+}
+
+/* 连接线样式 */
+.react-flow__connection-path {
+    stroke: #8b5cf6;
+    stroke-width: 2;
+}
+
+/* 节点选中状态 */
+.react-flow__node.selected {
+    box-shadow: 0 0 0 2px #8b5cf6;
+}
+
+/* 节点悬停状态 */
+.react-flow__node:hover {
+    opacity: 0.9;
+}
+
+/* Controls 样式优化 - 使其更像Dify */
+.react-flow__controls {
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    border-radius: 8px;
+    /* 圆角更大 */
+    overflow: hidden;
+    background-color: white;
+    /* 明确背景色 */
+}
+
+.react-flow__controls-button {
+    border: none !important;
+    border-bottom: 1px solid #f3f4f6 !important;
+    /* 浅灰色分割线 */
+    background: white !important;
+    color: #4b5563 !important;
+    /* 深灰色图标 */
+    width: 32px !important;
+    /* 固定宽度 */
+    height: 32px !important;
+    /* 固定高度 */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+}
+
+.react-flow__controls-button:last-child {
+    border-bottom: none !important;
+}
+
+.react-flow__controls-button:hover {
+    background: #f9fafb !important;
+    /* 浅灰色悬停 */
+}
+
+.react-flow__controls-button svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* MiniMap 样式优化 - 使其更像Dify */
+.react-flow__minimap {
+    background-color: #fff !important;
+    border: 1px solid #e5e7eb !important;
+    /* 浅灰色边框 */
+    border-radius: 8px !important;
+    /* 圆角 */
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    bottom: 20px !important;
+    right: 20px !important;
+}
+
+/* 提示文本样式 */
+.workflow-tooltip {
+    position: absolute;
+    background-color: #334155;
+    color: white;
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 1000;
+    white-space: nowrap;
+}
+
+/* 节点拖拽效果 */
+.react-flow__node-dragging {
+    z-index: 10;
+}
+
+/* 工作流节点分类颜色 */
+.node-llm {
+    background-color: #8b5cf6 !important;
+}
+
+.node-tool {
+    background-color: #10b981 !important;
+}
+
+.node-condition {
+    background-color: #f59e0b !important;
+}
+
+.node-input {
+    background-color: #3b82f6 !important;
+}
+
+.node-output {
+    background-color: #ec4899 !important;
+}
+
+.node-knowledge {
+    background-color: #6366f1 !important;
+}
+
+/* 控制面板 */
+.custom-controls {
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+    background-color: white;
+    padding: 4px;
+}
+
+.custom-controls button {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: white;
+    color: #6b7280;
+    transition: all 0.2s;
+}
+
+.custom-controls button:hover {
+    background-color: #f3f4f6;
+    color: #4b5563;
+}
+
+.custom-controls button.active {
+    background-color: #eff6ff;
+    color: #3b82f6;
+}
+
+/* 小地图 */
+.custom-minimap {
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+    background-color: #f1f5f9;
+    margin: 12px;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+}
+
+.custom-minimap:hover {
+    opacity: 1;
+}
+
+.minimap-node {
+    fill: white;
+    stroke-width: 3;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+/* 节点样式 */
+.react-flow__node {
+    transition: transform 0.1s ease;
+    margin: 10px;
+    min-width: 150px;
+}
+
+.react-flow__node.selected {
+    z-index: 10;
+}
+
+.react-flow__node:hover {
+    transform: translateY(-2px);
+}
+
+/* 边缘样式 */
+.react-flow__edge path {
+    transition: stroke 0.2s, stroke-width 0.2s;
+}
+
+.react-flow__edge path.selected {
+    stroke-dasharray: none;
+}
+
+.react-flow__edge-path:hover {
+    stroke-width: 2.5px !important;
+}
+
+/* 提示样式 */
+.node-tooltip {
+    position: absolute;
+    background-color: #fff;
+    color: #1f2937;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    z-index: 999;
+    pointer-events: none;
+    max-width: 300px;
+    border: 1px solid #e5e7eb;
+}
+
+/* 自定义连接线 */
+.custom-connection-line {
+    stroke: #6366F1;
+    stroke-width: 2;
+    stroke-dasharray: 5 3;
+    fill: none;
+}
+
+/* 上下文菜单 */
+.context-menu {
+    animation: fadeIn 0.15s ease-out;
+    transform-origin: top left;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.98);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* 缩放控制栏 */
+.zoom-controls {
+    display: flex;
+    align-items: center;
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    padding: 2px;
+}
+
+.zoom-controls button {
+    border: none;
+    background: transparent;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 4px;
+    color: #4b5563;
+}
+
+.zoom-controls button:hover {
+    background-color: #f3f4f6;
+}
+
+.zoom-controls .zoom-value {
+    font-size: 12px;
+    color: #4b5563;
+    padding: 0 8px;
+}
+
+/* 空状态 */
+.workflow-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #6b7280;
+    padding: 2rem;
+    text-align: center;
+}
+
+.workflow-empty-state .icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    color: #d1d5db;
+}
+
+.workflow-empty-state .heading {
+    font-weight: 600;
+    font-size: 1.25rem;
+    color: #4b5563;
+    margin-bottom: 0.5rem;
+}
+
+.workflow-empty-state .desc {
+    color: #6b7280;
+    max-width: 300px;
+    margin-bottom: 1rem;
+}
+
+/* 编辑面板动画 */
+.editor-panel-enter {
+    opacity: 0;
+    transform: translateX(20px);
+}
+
+.editor-panel-enter-active {
+    opacity: 1;
+    transform: translateX(0);
+    transition: opacity 250ms, transform 250ms;
+}
+
+.editor-panel-exit {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.editor-panel-exit-active {
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 250ms, transform 250ms;
+}
+
+/* 画布内容自适应 */
+.react-flow {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* 防止画布缩放时节点变形 */
+.react-flow__viewport {
+    transition: transform 0.2s ease;
+}
+
+/* 修复React Flow响应式问题 */
+.react-flow__container {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* 优化节点间的间距和位置 */
+.react-flow__node {
+    z-index: 3;
+}
+
+/* 优化高亮边缘 */
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:focus .react-flow__edge-path,
+.react-flow__edge:focus-visible .react-flow__edge-path {
+    stroke-width: 3 !important;
+}
+
+/* 连接点样式 */
+.react-flow__handle {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    border: 2px solid #94a3b8;
+    cursor: crosshair;
+    transition: all 0.2s ease;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
+}
+
+.react-flow__handle:hover {
+    transform: scale(1.2);
+    background-color: #e2e8f0;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.react-flow__handle-source {
+    border-color: #6366f1;
+    background-color: #eff6ff;
+}
+
+.react-flow__handle-target {
+    border-color: #10b981;
+    background-color: #ecfdf5;
+}
+
+/* 连接线样式 */
+.react-flow__connection-path {
+    stroke: #6366f1;
+    stroke-width: 2;
+    fill: none;
+}
+
+.custom-edge-path {
+    stroke-width: 2;
+    fill: none;
+    transition: stroke 0.2s, stroke-width 0.2s;
+}
+
+.custom-connection-line {
+    stroke-width: 2;
+    fill: none;
+}
+
+/* 连接线流动动画 */
+@keyframes flowing {
+    from {
+        stroke-dashoffset: 10;
+    }
+
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+/* 连接反馈样式 */
+.react-flow__connection.valid path {
+    stroke: #10b981;
+}
+
+.react-flow__connection.invalid path {
+    stroke: #ef4444;
+}
+
+/* 边缘标签样式 */
+.edge-label-container {
+    pointer-events: none;
+    overflow: visible;
+}
+
+.edge-label {
+    background-color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #475569;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e2e8f0;
+    text-align: center;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
