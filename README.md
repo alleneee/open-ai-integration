@@ -12,6 +12,7 @@
 * **用户认证:** JWT (JSON Web Token)
 * **数据库迁移:** Alembic
 * **任务管理:** 包含任务状态跟踪与取消功能
+* **对话系统:** 支持多轮对话、流式输出和知识库增强
 
 ## 项目结构
 
@@ -38,7 +39,8 @@
     │   │       ├── documents.py       # 文档管理端点  
     │   │       ├── knowledge_base.py  # 知识库管理端点
     │   │       ├── knowledge_bases.py # 增强版知识库管理端点
-    │   │       └── knowledgebase.py   # 传统知识库管理端点
+    │   │       ├── knowledgebase.py   # 传统知识库管理端点
+    │   │       └── conversations.py   # 对话管理端点
     ├── core/
     │   ├── config.py     # 配置加载 (Pydantic BaseSettings)
     │   ├── security.py   # 安全相关功能 (如密码哈希, JWT)
@@ -49,7 +51,8 @@
     │   ├── database.py   # 数据库连接和基础类
     │   ├── user.py       # 用户, 角色和权限模型
     │   ├── document.py   # 文档和段落模型
-    │   └── knowledge_base.py # 知识库模型
+    │   ├── knowledge_base.py # 知识库模型
+    │   └── conversation.py   # 对话和消息模型
     ├── schemas/
     │   ├── schemas.py    # API 请求/响应的 Pydantic 模型
     │   └── user.py       # 用户相关的Pydantic模型
@@ -60,6 +63,7 @@
     │   ├── rag.py        # 核心 RAG 流水线逻辑
     │   ├── vector_store.py  # Milvus 交互逻辑
     │   ├── conversation.py  # 会话历史管理 (Redis)
+    │   ├── conversation_service.py # 对话管理服务
     │   ├── document_chunker.py # 文档分块服务
     │   ├── document_processor.py # 文档处理服务
     │   ├── knowledge_base.py # 知识库服务
@@ -148,6 +152,19 @@
 * **`DELETE /api/v1/tasks/{task_id}`**: 取消正在执行的任务。需要认证。
 * **`POST /api/v1/tasks/cancel-batch`**: 批量取消多个任务。需要认证。
 * **`DELETE /api/v1/tasks/cleanup/{days}`**: 清理指定天数之前的旧任务。需要管理员权限。
+
+### 对话相关
+
+* **`POST /api/v1/conversations/`**: 创建新对话。需要认证。
+* **`GET /api/v1/conversations/`**: 获取对话列表，支持分页和状态过滤。需要认证。
+* **`GET /api/v1/conversations/{conversation_id}`**: 获取对话详情和消息历史。需要认证。
+* **`PUT /api/v1/conversations/{conversation_id}`**: 更新对话信息。需要认证。
+* **`DELETE /api/v1/conversations/{conversation_id}`**: 删除对话。需要认证。
+* **`POST /api/v1/conversations/{conversation_id}/messages`**: 向对话添加消息。需要认证。
+* **`POST /api/v1/conversations/generate`**: 生成对话消息。需要认证。
+* **`POST /api/v1/conversations/generate/stream`**: 流式生成对话消息。需要认证。
+* **`POST /api/v1/conversations/rag`**: 生成RAG知识库增强回复。需要认证。
+* **`POST /api/v1/conversations/rag/stream`**: 流式生成RAG知识库增强回复。需要认证。
 
 ### RAG 相关
 
@@ -298,6 +315,83 @@ curl -X GET "http://localhost:8000/api/v1/tasks/{task_id}" \
 # 获取任务列表（带筛选）
 curl -X GET "http://localhost:8000/api/v1/tasks/?status=RUNNING&limit=20&offset=0" \
   -H "Authorization: Bearer {your_token}"
+```
+
+## 对话系统
+
+本系统实现了完整的多轮对话管理功能，支持基本对话、流式输出和知识库增强生成：
+
+### 核心功能
+
+* **多轮对话**：支持创建对话、添加消息和生成回复
+* **对话管理**：查询、更新和删除对话，支持对话状态管理（活跃/归档）
+* **消息生成**：使用LLM生成回复内容
+* **流式输出**：支持流式返回生成内容，提升用户体验
+* **知识库增强**：结合RAG技术生成基于知识库的精准回复
+* **用户隔离**：每个用户只能访问自己创建的对话
+
+### 数据模型
+
+* **对话(Conversation)**：包含ID、标题、创建者、状态等基本信息
+* **消息(Message)**：包含角色(用户/助手/系统)、内容、创建时间等
+
+### 对话管理API
+
+* 创建、查询、更新和删除对话
+* 向对话添加消息
+* 生成对话回复（普通和流式）
+* 知识库增强生成（普通和流式）
+
+### 使用示例
+
+#### 创建对话和添加消息
+
+```bash
+# 创建新对话
+curl -X POST "http://localhost:8000/api/v1/conversations/" \
+  -H "Authorization: Bearer {your_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "技术咨询对话"
+  }'
+
+# 向对话添加消息
+curl -X POST "http://localhost:8000/api/v1/conversations/{conversation_id}/messages" \
+  -H "Authorization: Bearer {your_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "user",
+    "content": "什么是向量数据库？"
+  }'
+```
+
+#### 生成对话回复
+
+```bash
+# 生成普通回复
+curl -X POST "http://localhost:8000/api/v1/conversations/generate" \
+  -H "Authorization: Bearer {your_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_id": "{conversation_id}",
+    "message": "什么是向量数据库？",
+    "llm_config": {
+      "model_name": "gpt-3.5-turbo",
+      "temperature": 0.7
+    }
+  }'
+
+# 生成知识库增强回复
+curl -X POST "http://localhost:8000/api/v1/conversations/rag" \
+  -H "Authorization: Bearer {your_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_id": "{conversation_id}",
+    "message": "什么是向量数据库？",
+    "knowledge_base_ids": ["{kb_id}"],
+    "search_top_k": 5,
+    "stream": false
+  }'
 ```
 
 ## 重要说明
