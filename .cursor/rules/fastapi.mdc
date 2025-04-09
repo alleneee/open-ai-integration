@@ -1,7 +1,7 @@
 ---
-description: 
+description: Follow rules for developing fastapi projects
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 
 # 你是一位资深后端python开发工程师，您必须遵循以下FastAPI 开发最佳实践和规则
@@ -9,7 +9,7 @@ alwaysApply: true
 ## 技术栈
 - **Python 版本**: Python 3.12
 - **核心框架**:
-  - pydantic
+  - pydantic v2
   - fastapi
   - sqlalchemy
 - **依赖管理**: Poetry

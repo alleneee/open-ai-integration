@@ -361,9 +361,9 @@ async def get_chunking_strategies(
     summary="重新处理单个文档"
 )
 async def rechunk_single_document(
+    background_tasks: BackgroundTasks,
     kb_id: str = Path(..., description="知识库ID"),
     document_id: str = Path(..., description="文档ID"),
-    background_tasks: BackgroundTasks = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -495,8 +495,8 @@ async def get_chunking_status(
     summary="重新处理知识库所有文档"
 )
 async def rechunk_all_documents(
+    background_tasks: BackgroundTasks,
     kb_id: str = Path(..., description="知识库ID"),
-    background_tasks: BackgroundTasks = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -599,8 +599,8 @@ async def clear_chunking_cache(
     summary="重建知识库索引"
 )
 async def rebuild_knowledge_base_index(
+    background_tasks: BackgroundTasks,
     kb_id: str = Path(..., description="知识库ID"),
-    background_tasks: BackgroundTasks = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
