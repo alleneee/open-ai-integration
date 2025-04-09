@@ -19,11 +19,6 @@ from app.models.document import (
     DocumentStatus, Document, get_document_by_id,
     list_documents, create_document
 )
-# The following import block is removed as these schemas are not defined in schemas.py
-# from app.schemas.schemas import (
-#     DocumentUploadResponse, DocumentQueryRequest, 
-#     DocumentQueryResponse, SegmentResponse 
-# )
 from app.services.parser import parse_uploaded_file_and_split
 from app.services.vector_store import get_retriever
 from app.task.document_tasks import (
@@ -34,7 +29,8 @@ from app.services.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/documents", tags=["Documents"])
+# 移除前缀，将由router.py中的include_router设置
+router = APIRouter()
 
 @router.post("/", response_model=DocumentResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
@@ -248,52 +244,48 @@ async def batch_delete_documents(
     db: Session = Depends(get_db)
 ):
     """
-    批量删除多个文档
+    批量删除文档及其所有段落
     """
     if not document_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="至少需要提供一个文档ID"
         )
-        
-    # 验证所有文档是否属于当前租户
-    documents = []
-    collection_names = set()
     
+    valid_document_ids = []
+    collection_name = None
+    
+    # 验证所有文档是否存在且用户有权限
     for doc_id in document_ids:
         document = get_document_by_id(doc_id, db=db)
+        
         if not document:
+            logger.warning(f"文档 {doc_id} 不存在，将跳过")
             continue
-            
+        
         if document.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"无权删除文档 {doc_id}"
-            )
-            
-        documents.append(document)
-        collection_names.add(document.collection_name)
+            logger.warning(f"无权访问文档 {doc_id}，将跳过")
+            continue
+        
+        valid_document_ids.append(doc_id)
+        
+        # 获取集合名称（假设所有文档都在同一个集合中）
+        if not collection_name:
+            collection_name = document.collection_name
     
-    if not documents:
+    if not valid_document_ids:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="未找到任何指定的文档"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="没有找到有效的文档或无权限访问提供的文档"
         )
     
-    # 如果文档来自不同的集合，则需要分别处理
-    for collection_name in collection_names:
-        collection_doc_ids = [
-            doc.id for doc in documents 
-            if doc.collection_name == collection_name
-        ]
-        
-        if collection_doc_ids:
-            batch_delete_document_task.delay(
-                document_ids=collection_doc_ids,
-                collection_name=collection_name
-            )
+    # 在后台任务中删除文档
+    batch_delete_document_task.delay(
+        document_ids=valid_document_ids,
+        collection_name=collection_name
+    )
     
     return {
-        "message": f"已启动 {len(documents)} 个文档的删除任务",
-        "document_count": len(documents)
-    }
+        "message": f"批量文档删除任务已启动，处理 {len(valid_document_ids)} 个文档",
+        "document_ids": valid_document_ids
+    } 
