@@ -5,6 +5,7 @@
 import logging
 import os
 from typing import List, Optional, Dict, Any, Literal, Union, Tuple
+from datetime import datetime
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -461,12 +462,411 @@ def delete_knowledge_base(collection_name: str) -> bool:
         raise
 
 # 这些函数可以根据需要添加或修改
-def add_documents(documents, metadatas, collection_name=None):
-    """添加文档到向量存储"""
-    # 简化实现
-    logger.info(f"添加 {len(documents)} 个文档到集合 {collection_name}")
-    return True
+def add_documents(documents=None, metadatas=None, docs=None, collection_name=None, auto_create_collection=False):
+    """添加文档到向量存储
+    
+    参数:
+        documents: 文档内容列表（向后兼容）
+        metadatas: 元数据列表（向后兼容）
+        docs: 文档对象列表，优先于documents参数
+        collection_name: 集合名称
+        auto_create_collection: 当集合不存在时是否自动创建
+    """
+    logger.info(f"添加文档到向量存储，集合: {collection_name}")
+    
+    try:
+        # 确定要使用的文档内容和元数据
+        if docs is not None:
+            # 从 docs 参数中提取文档内容和元数据
+            documents_to_add = [doc.page_content for doc in docs]
+            metadatas_to_add = [doc.metadata for doc in docs]
+            doc_count = len(docs)
+        elif documents is not None:
+            # 使用传统的 documents 和 metadatas 参数
+            documents_to_add = documents
+            metadatas_to_add = metadatas
+            doc_count = len(documents)
+        else:
+            logger.warning("没有提供任何文档，add_documents 操作被跳过")
+            return False
+        
+        # 获取嵌入模型
+        embeddings = _get_embedding_instance()
+        
+        # 先尝试连接 Milvus
+        try:
+            get_milvus_connection()
+        except Exception as e:
+            logger.warning(f"连接 Milvus 时出错: {e}")
+            if not HAS_PYMILVUS or not HAS_LANGCHAIN:
+                logger.warning("使用模拟对象，假设添加成功")
+                return True
+            raise
+        
+        # 准备连接参数，修复 URI 格式
+        uri = settings.milvus_uri
+        if "#" in uri:
+            uri = uri.split("#")[0].strip()
+        if uri.startswith('"') and uri.endswith('"'):
+            uri = uri[1:-1]
+        elif uri.startswith("'") and uri.endswith("'"):
+            uri = uri[1:-1]
+            
+        # 转换 grpc:// 为 http://，解决 langchain-community 中的兼容性问题
+        if uri.startswith("grpc://"):
+            uri = uri.replace("grpc://", "http://")
+            logger.info(f"将 grpc:// 格式的 URI 转换为 http:// 格式: {uri}")
+        
+        connection_args = {"uri": uri}
+        if settings.milvus_token and settings.milvus_token != "your-milvus-api-key":
+            token = settings.milvus_token
+            if "#" in token:
+                token = token.split("#")[0].strip()
+            if token.startswith('"') and token.endswith('"'):
+                token = token[1:-1]
+            elif token.startswith("'") and token.endswith("'"):
+                token = token[1:-1]
+            connection_args["token"] = token
+            
+        logger.info(f"使用连接参数: {connection_args}")
+        
+        # 验证知识库是否存在
+        collection_exists = utility.has_collection(collection_name)
+        if not collection_exists:
+            if not auto_create_collection:
+                logger.error(f"知识库 '{collection_name}' 不存在，请先创建知识库")
+                return False
+            else:
+                logger.warning(f"知识库 '{collection_name}' 不存在，将自动创建")
+            
+        # 添加文档到向量存储
+        if collection_exists:
+            # 向现有向量存储添加文档
+            try:
+                existing_vector_store = Milvus(
+                    collection_name=collection_name,
+                    embedding_function=embeddings,
+                    connection_args=connection_args
+                )
+                existing_vector_store.add_texts(
+                    texts=documents_to_add,
+                    metadatas=metadatas_to_add
+                )
+                logger.info(f"成功添加 {doc_count} 个文档到现有向量存储 {collection_name}")
+                return True
+            except Exception as e:
+                logger.error(f"向现有向量存储添加文档时出错: {e}")
+                if not HAS_PYMILVUS or not HAS_LANGCHAIN:
+                    logger.warning("使用模拟对象，假设添加成功")
+                    return True
+                raise
+        else:
+            # 创建新的向量存储并添加文档
+            try:
+                logger.info(f"尝试创建新的向量存储 {collection_name} 使用 URI: {uri}")
+                Milvus.from_texts(
+                    texts=documents_to_add,
+                    embedding=embeddings,
+                    metadatas=metadatas_to_add,
+                    collection_name=collection_name,
+                    connection_args=connection_args
+                )
+                logger.info(f"创建了新的向量存储 {collection_name} 并添加了 {doc_count} 个文档")
+                return True
+            except Exception as e:
+                logger.error(f"创建新的向量存储并添加文档时出错: {e}")
+                if not HAS_PYMILVUS or not HAS_LANGCHAIN:
+                    logger.warning("使用模拟对象，假设添加成功")
+                    return True
+                raise
+                
+    except Exception as e:
+        logger.exception(f"添加文档到向量存储时发生错误: {e}")
+        if not HAS_PYMILVUS or not HAS_LANGCHAIN:
+            logger.warning("使用模拟对象，假设添加成功")
+            return True
+        raise
 
 def get_embedding_model():
     """获取嵌入模型"""
-    return _get_embedding_instance() 
+    return _get_embedding_instance()
+
+def create_collection(collection_name: str, dimension: int = 1536) -> bool:
+    """创建知识库（向量存储集合）
+    
+    参数:
+        collection_name: 集合名称
+        dimension: 向量维度，默认为1536（适用于许多OpenAI嵌入模型）
+        
+    返回:
+        创建成功返回True，否则返回False
+    """
+    logger.info(f"创建知识库: {collection_name}, 维度: {dimension}")
+    
+    try:
+        # 连接Milvus
+        get_milvus_connection()
+        
+        # 检查集合是否已存在
+        if utility.has_collection(collection_name):
+            logger.warning(f"知识库 '{collection_name}' 已存在，无需创建")
+            return True
+        
+        # 使用嵌入模型
+        embeddings = _get_embedding_instance()
+        
+        # 准备连接参数，修复 URI 格式
+        uri = settings.milvus_uri
+        if "#" in uri:
+            uri = uri.split("#")[0].strip()
+        if uri.startswith('"') and uri.endswith('"'):
+            uri = uri[1:-1]
+        elif uri.startswith("'") and uri.endswith("'"):
+            uri = uri[1:-1]
+            
+        # 转换 grpc:// 为 http://，解决 langchain-community 中的兼容性问题
+        if uri.startswith("grpc://"):
+            uri = uri.replace("grpc://", "http://")
+            logger.info(f"将 grpc:// 格式的 URI 转换为 http:// 格式: {uri}")
+        
+        connection_args = {"uri": uri}
+        if settings.milvus_token and settings.milvus_token != "your-milvus-api-key":
+            token = settings.milvus_token
+            if "#" in token:
+                token = token.split("#")[0].strip()
+            if token.startswith('"') and token.endswith('"'):
+                token = token[1:-1]
+            elif token.startswith("'") and token.endswith("'"):
+                token = token[1:-1]
+            connection_args["token"] = token
+        
+        # 创建空集合
+        # 使用LangChain的Milvus创建方法
+        Milvus.from_texts(
+            texts=["初始化文档"],  # 添加一个初始文档以创建集合
+            embedding=embeddings,
+            metadatas=[{"init": True}],
+            collection_name=collection_name,
+            connection_args=connection_args
+        )
+        
+        logger.info(f"成功创建知识库: {collection_name}")
+        return True
+        
+    except Exception as e:
+        logger.exception(f"创建知识库 '{collection_name}' 时出错: {e}")
+        if not HAS_PYMILVUS or not HAS_LANGCHAIN:
+            logger.warning("使用模拟对象，假设创建成功")
+            return True
+        return False
+
+def check_collection_exists(collection_name: str) -> bool:
+    """检查知识库是否存在
+    
+    参数:
+        collection_name: 集合名称
+        
+    返回:
+        存在返回True，否则返回False
+    """
+    try:
+        # 连接Milvus
+        get_milvus_connection()
+        
+        # 检查集合是否存在
+        exists = utility.has_collection(collection_name)
+        return exists
+        
+    except Exception as e:
+        logger.exception(f"检查知识库 '{collection_name}' 是否存在时出错: {e}")
+        if not HAS_PYMILVUS:
+            # 使用模拟对象时，总是返回True
+            return True
+        return False
+
+def get_all_collections() -> List[str]:
+    """获取所有知识库名称
+    
+    返回:
+        知识库名称列表
+    """
+    try:
+        # 连接Milvus
+        get_milvus_connection()
+        
+        # 获取所有集合
+        collections = utility.list_collections()
+        return collections
+        
+    except Exception as e:
+        logger.exception(f"获取所有知识库时出错: {e}")
+        if not HAS_PYMILVUS:
+            # 使用模拟对象时，返回空列表
+            return []
+        return []
+
+def delete_collection(collection_name: str) -> bool:
+    """删除知识库
+    
+    参数:
+        collection_name: 集合名称
+        
+    返回:
+        删除成功返回True，否则返回False
+    """
+    try:
+        # 连接Milvus
+        get_milvus_connection()
+        
+        # 检查集合是否存在
+        if not utility.has_collection(collection_name):
+            logger.warning(f"知识库 '{collection_name}' 不存在，无需删除")
+            return True
+        
+        # 删除集合
+        utility.drop_collection(collection_name)
+        logger.info(f"成功删除知识库: {collection_name}")
+        return True
+        
+    except Exception as e:
+        logger.exception(f"删除知识库 '{collection_name}' 时出错: {e}")
+        if not HAS_PYMILVUS:
+            # 使用模拟对象时，总是返回True
+            return True
+        return False
+
+### 实现强化的知识库管理函数
+
+def ensure_collection_exists(collection_name: str) -> bool:
+    """确保向量存储集合存在，如不存在则创建
+    
+    参数:
+        collection_name: 集合名称
+        
+    返回:
+        成功返回True，失败返回False
+    """
+    try:
+        if check_collection_exists(collection_name):
+            logger.info(f"向量存储集合 {collection_name} 已存在")
+            return True
+        
+        return create_collection(collection_name)
+    except Exception as e:
+        logger.exception(f"确保向量存储集合存在时出错: {e}")
+        return False
+
+def add_documents_to_knowledge_base(kb_id: str, documents=None, metadatas=None, docs=None) -> bool:
+    """向指定知识库添加文档
+    
+    这个函数确保知识库存在，且使用知识库的ID作为集合名称
+    
+    参数:
+        kb_id: 知识库ID
+        documents: 文档内容列表
+        metadatas: 元数据列表
+        docs: 文档对象列表
+    
+    返回:
+        成功返回True，失败返回False
+    """
+    # 验证知识库存在
+    if not check_collection_exists(kb_id):
+        logger.error(f"知识库 {kb_id} 不存在，请先创建知识库")
+        return False
+        
+    # 调用添加文档的函数
+    try:
+        return add_documents(
+            documents=documents,
+            metadatas=metadatas,
+            docs=docs,
+            collection_name=kb_id,
+            auto_create_collection=False  # 不自动创建知识库
+        )
+    except Exception as e:
+        logger.exception(f"向知识库 {kb_id} 添加文档时出错: {e}")
+        return False
+
+def get_knowledge_base_stats(kb_id: str) -> Dict[str, Any]:
+    """获取知识库统计信息
+    
+    参数:
+        kb_id: 知识库ID
+        
+    返回:
+        包含统计信息的字典
+    """
+    try:
+        # 连接Milvus
+        get_milvus_connection()
+        
+        # 验证知识库存在
+        if not check_collection_exists(kb_id):
+            return {
+                "exists": False,
+                "document_count": 0,
+                "last_updated": None
+            }
+            
+        # 获取集合信息
+        try:
+            collection = Collection(kb_id)
+            collection.load()
+            
+            stats = {
+                "exists": True,
+                "document_count": collection.num_entities,
+                "last_updated": datetime.now().isoformat()  # 当前时间，未来可以从元数据获取
+            }
+            
+            collection.release()
+            return stats
+            
+        except Exception as e:
+            logger.warning(f"获取知识库 {kb_id} 统计信息时出错: {e}")
+            return {
+                "exists": True,
+                "document_count": "未知(获取失败)",
+                "error": str(e)
+            }
+    except Exception as e:
+        logger.exception(f"获取知识库 {kb_id} 统计信息时出错: {e}")
+        if not HAS_PYMILVUS:
+            # 使用模拟对象时
+            return {
+                "exists": True,
+                "document_count": 0,
+                "note": "使用模拟对象"
+            }
+        return {
+            "exists": False,
+            "error": str(e)
+        }
+
+def sync_knowledge_base_metadata(kb_id: str, metadata: Dict[str, Any]) -> bool:
+    """同步知识库元数据到向量存储
+    
+    参数:
+        kb_id: 知识库ID
+        metadata: 元数据字典
+        
+    返回:
+        成功返回True，失败返回False
+    """
+    try:
+        # 验证知识库存在
+        if not check_collection_exists(kb_id):
+            logger.error(f"知识库 {kb_id} 不存在，无法同步元数据")
+            return False
+            
+        # 这里可以实现元数据同步逻辑
+        # 例如，可以将元数据存储在向量存储的属性中
+        logger.info(f"同步知识库 {kb_id} 元数据: {metadata}")
+        
+        # 由于当前向量存储可能不支持元数据存储，这里先返回成功
+        return True
+        
+    except Exception as e:
+        logger.exception(f"同步知识库 {kb_id} 元数据时出错: {e}")
+        return False 

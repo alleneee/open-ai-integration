@@ -72,7 +72,8 @@ def document_indexing_task(self, document_id: str, file_path: str, filename: str
             add_documents(
                 documents=[chunk.page_content for chunk in document_chunks],
                 metadatas=metadatas,
-                collection_name=collection_name
+                collection_name=collection_name,
+                auto_create_collection=True
             )
             
             # 更新状态为已完成

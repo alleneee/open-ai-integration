@@ -158,3 +158,6 @@ Thumbs.db
 
 # Cursor IDE
 .cursor/ 
+
+#忽略dify
+dify/

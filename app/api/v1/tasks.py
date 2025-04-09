@@ -9,13 +9,28 @@ from sqlalchemy.orm import Session
 from celery.result import AsyncResult
 
 from app.task.celery_app import celery_app
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_current_user_optional, get_db
 from app.models.user import User
 from app.models.task import TaskStatusResponse, TaskStatusCreate, TaskStatusUpdate, TaskState, TaskStatusFilterParams
 from app.services.task_manager import get_task_manager, TaskManager
 from app.task.task_cancellation import cancel_task, cancel_child_tasks
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
+
+
+def is_admin(user: Optional[User]) -> bool:
+    """
+    检查用户是否是管理员
+    
+    Args:
+        user: 用户对象，可以为 None
+        
+    Returns:
+        如果用户是管理员则返回 True，否则返回 False
+    """
+    if user is None:
+        return False
+    return user.is_superuser
 
 
 @router.get(
@@ -56,12 +71,12 @@ async def list_tasks(
     
     # 转换元数据为JSON
     for task in tasks:
-        if task.metadata:
+        if task.task_metadata:
             try:
                 import json
-                task.metadata = json.loads(task.metadata)
+                task.task_metadata = json.loads(task.task_metadata)
             except:
-                task.metadata = {}
+                task.task_metadata = {}
     
     return tasks
 
@@ -109,30 +124,30 @@ async def count_tasks(
 )
 async def get_task(
     task_id: str = Path(..., description="任务ID"),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     task_manager: TaskManager = Depends(get_task_manager)
 ):
     """
     获取指定任务ID的详细信息
     
-    如果不是管理员，只能查看自己的任务
+    如果用户已登录且不是管理员，只能查看自己的任务
     """
     task = task_manager.get_task(task_id)
     
-    # 非管理员只能查看自己的任务
-    if not is_admin(current_user) and task.user_id != current_user.id:
+    # 如果用户已登录且不是管理员，验证权限
+    if current_user and not is_admin(current_user) and task.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="您无权查看此任务"
         )
     
     # 转换元数据为JSON
-    if task.metadata:
+    if task.task_metadata:
         try:
             import json
-            task.metadata = json.loads(task.metadata)
+            task.task_metadata = json.loads(task.task_metadata)
         except:
-            task.metadata = {}
+            task.task_metadata = {}
     
     return task
 

@@ -199,3 +199,44 @@ def check_resource_permission(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=f"没有权限执行此操作: {action} {resource}"
     )
+
+async def get_current_user_optional(
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(None)
+) -> Optional[User]:
+    """
+    获取当前用户，如果有提供有效的认证令牌
+    
+    与 get_current_user 不同，认证失败时不抛出异常，而是返回 None
+    
+    Args:
+        db: 数据库会话
+        authorization: Authorization 请求头，格式为 "Bearer {token}"
+        
+    Returns:
+        当前用户对象，如果认证失败则返回 None
+    """
+    if authorization is None:
+        return None
+        
+    # 获取token，格式应该是 "Bearer {token}"
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            return None
+    except (ValueError, AttributeError):
+        return None
+    
+    try:
+        payload = decode_token(token)
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+    except JWTError:
+        return None
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or not user.is_active:
+        return None
+    
+    return user

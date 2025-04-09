@@ -4,51 +4,135 @@
 """
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from enum import Enum
+import json
 
-from sqlalchemy import Column, String, DateTime, ForeignKey, Table, Boolean, Integer, Text
+from sqlalchemy import Column, String, DateTime, ForeignKey, Table, Boolean, Integer, Text, Enum as SQLAlchemyEnum, JSON
 from sqlalchemy.orm import relationship, mapped_column, Mapped
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.database import Base
-from app.models.document import Document
+from app.models.document import Document, DocumentResponse
 
 # 知识库与文档的多对多关联表
 knowledge_base_document = Table(
     "knowledge_base_document",
     Base.metadata,
-    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id")),
-    Column("document_id", String(36), ForeignKey("documents.id")),
+    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
+    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
 )
 
 
-class KnowledgeBase(Base):
-    """知识库模型"""
-    __tablename__ = "knowledge_bases"
+class ChunkingStrategy(str, Enum):
+    """文本分块策略枚举"""
+    RECURSIVE = "recursive"
+    FIXED_SIZE = "fixed_size"
+    SEMANTIC = "semantic"
+    CUSTOM = "custom"
+
+
+class DatasetPermissionEnum(str, Enum):
+    """知识库权限枚举"""
+    ONLY_ME = "only_me"  # 仅创建者
+    ALL_TEAM = "all_team_members"  # 所有团队成员
+    PARTIAL_TEAM = "partial_members"  # 指定团队成员
+
+
+class RetrievalMethod(str, Enum):
+    """检索方法枚举"""
+    SEMANTIC_SEARCH = "semantic_search"  # 语义检索
+    KEYWORD_SEARCH = "keyword_search"    # 关键词检索
+    HYBRID_SEARCH = "hybrid_search"      # 混合检索
+
+
+class KnowledgeBaseBase(BaseModel):
+    """知识库基础模型"""
+    name: str = Field(..., description="知识库名称")
+    description: Optional[str] = Field(None, description="知识库描述")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="知识库元数据")
+
+
+class KnowledgeBaseCreate(KnowledgeBaseBase):
+    """创建知识库的请求模型"""
+    created_by: Optional[str] = Field(None, description="创建者ID")
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    """更新知识库的请求模型"""
+    description: Optional[str] = Field(None, description="知识库描述")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="知识库元数据")
+
+
+class KnowledgeBase(KnowledgeBaseBase):
+    """知识库完整模型"""
+    id: str = Field(..., description="知识库ID")
+    document_count: int = Field(0, description="知识库中的文档数量")
+    created_at: datetime = Field(..., description="创建时间")
+    updated_at: datetime = Field(..., description="最后更新时间")
+    created_by: Optional[str] = Field(None, description="创建者ID")
+
+    class Config:
+        orm_mode = True
+
+
+class KnowledgeBaseDocument(BaseModel):
+    """知识库文档关联模型"""
+    kb_id: str = Field(..., description="知识库ID")
+    document_id: str = Field(..., description="文档ID")
+    added_at: datetime = Field(..., description="添加时间")
+
+    class Config:
+        orm_mode = True
+
+
+class KnowledgeBaseStats(BaseModel):
+    """知识库统计信息模型"""
+    id: str = Field(..., description="知识库ID")
+    name: str = Field(..., description="知识库名称")
+    document_count: int = Field(0, description="知识库中的文档数量")
+    vector_count: int = Field(0, description="向量存储中的向量数量")
+    last_updated: Optional[datetime] = Field(None, description="最后更新时间")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="知识库元数据")
+
+
+# 子分块表定义
+class ChildChunk(Base):
+    """子分块模型，用于存储段落的进一步分割"""
+    __tablename__ = "child_chunks"
     
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    vector_store: Mapped[str] = mapped_column(String(50), nullable=False, default="milvus")
-    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False, default="openai")
-    
-    # 分块策略
-    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
-    chunk_overlap: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
-    chunking_strategy: Mapped[str] = mapped_column(String(50), nullable=False, default="paragraph")
-    custom_separators: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="自定义分隔符，JSON格式存储字符串列表")
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    segment_id: Mapped[str] = mapped_column(String(36), ForeignKey("segments.id", ondelete="CASCADE"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    meta_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tokens: Mapped[int] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    embedding_vector: Mapped[Optional[Any]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     
-    # 与文档的多对多关系
-    documents: Mapped[List["Document"]] = relationship(
-        "Document", secondary=knowledge_base_document, backref="knowledge_bases"
-    )
+    # 关系定义
+    segment = relationship("Segment", back_populates="child_chunks")
     
-    # 与用户的多对一关系
-    creator = relationship("User", backref="created_knowledge_bases")
+    @property
+    def meta_data_dict(self) -> Dict[str, Any]:
+        """获取元数据字典"""
+        return json.loads(self.meta_data) if self.meta_data else {}
+
+
+# 知识库权限表
+class KnowledgeBasePermission(Base):
+    """知识库权限模型，用于存储部分用户的访问权限"""
+    __tablename__ = "knowledge_base_permissions"
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    knowledge_base_id: Mapped[str] = mapped_column(String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # 关系定义
+    knowledge_base = relationship("KnowledgeBase")
+    user = relationship("User")
 
 
 # Pydantic 模型用于 API 请求和响应
@@ -57,104 +141,17 @@ from typing import List, Optional
 from datetime import datetime
 
 
-class KnowledgeBaseBase(BaseModel):
-    """知识库基础信息模型"""
-    name: str
-    description: Optional[str] = None
-    vector_store: str = "milvus"
-    embedding_model: str = "openai"
-    
-    # 分块策略
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
-    chunking_strategy: str = "paragraph"
-
-
-class KnowledgeBaseCreate(KnowledgeBaseBase):
-    """创建知识库请求模型"""
-    pass
-
-
-class KnowledgeBaseUpdate(BaseModel):
-    """更新知识库请求模型"""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    vector_store: Optional[str] = None
-    embedding_model: Optional[str] = None
-    chunk_size: Optional[int] = None
-    chunk_overlap: Optional[int] = None
-    chunking_strategy: Optional[str] = None
-    custom_separators: Optional[List[str]] = None
-    is_active: Optional[bool] = None
-
-
-class ChunkingConfig(BaseModel):
-    """分块配置"""
-    chunk_size: int
-    chunk_overlap: int
-    chunking_strategy: str
-    rechunk_documents: bool = False
-    custom_separators: Optional[List[str]] = None
-    
-    @validator('chunk_size')
-    def validate_chunk_size(cls, v):
-        if v <= 0:
-            raise ValueError('分块大小必须大于0')
-        if v > 10000:
-            raise ValueError('分块大小不能超过10000')
-        return v
-    
-    @validator('chunk_overlap')
-    def validate_chunk_overlap(cls, v, values):
-        if v < 0:
-            raise ValueError('分块重叠大小必须大于等于0')
-        if 'chunk_size' in values and v >= values['chunk_size']:
-            raise ValueError('分块重叠大小必须小于分块大小')
-        return v
-    
-    @validator('chunking_strategy')
-    def validate_chunking_strategy(cls, v):
-        valid_strategies = [
-            "paragraph", "token", "character", "markdown", "sentence", 
-            "adaptive", "newline", "double_newline", "custom", "chinese", "code"
-        ]
-        if v not in valid_strategies:
-            raise ValueError(f'无效的分块策略，有效的策略为: {", ".join(valid_strategies)}')
-        return v
-    
-    @validator('custom_separators')
-    def validate_custom_separators(cls, v, values):
-        if v is not None:
-            if not isinstance(v, list):
-                raise ValueError('自定义分隔符必须是字符串列表')
-            if not all(isinstance(sep, str) for sep in v):
-                raise ValueError('所有分隔符必须是字符串')
-            # 当策略为custom时，必须提供自定义分隔符
-            if values.get('chunking_strategy') == 'custom' and len(v) == 0:
-                raise ValueError('使用自定义分块策略时必须提供至少一个分隔符')
-        return v
-
-
-class KnowledgeBaseDocument(BaseModel):
-    """知识库中的文档关联模型"""
-    document_id: str
-
-
-class KnowledgeBaseDocumentAdd(BaseModel):
-    """向知识库添加文档的请求模型"""
-    document_ids: List[str]
-
-
 class KnowledgeBaseSchema(KnowledgeBaseBase):
     """知识库响应模型"""
     id: str
     is_active: bool
     chunk_size: int
     chunk_overlap: int
-    chunking_strategy: str
+    chunking_strategy: ChunkingStrategy
     created_at: datetime
     updated_at: datetime
     created_by: Optional[str] = None
+    built_in_field_enabled: bool = False
     
     class Config:
         from_attributes = True
@@ -163,11 +160,89 @@ class KnowledgeBaseSchema(KnowledgeBaseBase):
 class KnowledgeBaseDetailSchema(KnowledgeBaseSchema):
     """知识库详细信息响应模型，包含关联的文档"""
     documents: List["DocumentBriefSchema"] = []
+    retrieval_model: Optional[Dict[str, Any]] = None
+    document_stats: Optional[Dict[str, int]] = None
     
     class Config:
         from_attributes = True
 
 
 # 避免循环导入问题
-from app.models.document import DocumentBriefSchema
+from app.models.document import DocumentBriefSchema, DocumentStatus, Segment
 KnowledgeBaseDetailSchema.model_rebuild()
+
+
+class KnowledgeBaseResponse(KnowledgeBaseBase):
+    """知识库响应模型"""
+    id: str
+    created_at: str
+    updated_at: str
+    retrieval_model: Optional[Dict[str, Any]] = None
+    built_in_field_enabled: bool = False
+    
+    class Config:
+        orm_mode = True
+
+
+class KnowledgeBaseWithStats(KnowledgeBaseResponse):
+    """带统计信息的知识库模型"""
+    document_stats: Dict[str, int] = Field(
+        default_factory=lambda: {
+            "total": 0,
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "error": 0
+        }
+    )
+    embedding_available: bool = True
+
+
+class KnowledgeBaseList(BaseModel):
+    """知识库列表模型"""
+    total: int
+    items: List[KnowledgeBaseWithStats]
+    
+    class Config:
+        orm_mode = True
+
+
+class ChildChunkSchema(BaseModel):
+    """子分块响应模型"""
+    id: str
+    segment_id: str
+    content: str
+    meta_data: Optional[Dict[str, Any]] = None
+    tokens: Optional[int] = None
+    enabled: bool
+    status: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeBasePermissionSchema(BaseModel):
+    """知识库权限响应模型"""
+    user_id: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+# 知识库权限请求模型
+class GrantPermissionRequest(BaseModel):
+    """授予权限请求模型"""
+    user_id: str = Field(..., description="用户ID")
+    
+    class Config:
+        from_attributes = True
+
+
+class RevokePermissionRequest(BaseModel):
+    """撤销权限请求模型"""
+    user_id: str = Field(..., description="用户ID")
+    
+    class Config:
+        from_attributes = True

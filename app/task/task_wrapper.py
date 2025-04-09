@@ -47,9 +47,9 @@ def track_task_status(task_type: str, task_name: Optional[str] = None):
     """
     def decorator(func: F) -> F:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(self, *args, **kwargs):
             # 获取Celery任务实例和ID
-            celery_task = cast(Task, wrapper.task)
+            celery_task = self
             task_id = celery_task.request.id
             
             # 获取任务名称（默认使用函数名）
@@ -57,7 +57,7 @@ def track_task_status(task_type: str, task_name: Optional[str] = None):
             if task_name is None:
                 task_name = func.__name__
             
-            # 获取任务参数
+            # 获取任务参数 (exclude self from args for metadata)
             task_args = {
                 "args": args,
                 "kwargs": kwargs
@@ -78,15 +78,15 @@ def track_task_status(task_type: str, task_name: Optional[str] = None):
                     task_type=task_type,
                     status=TaskState.RUNNING,
                     progress=0.0,
-                    metadata=task_args,
+                    task_metadata=task_args,
                     user_id=user_id
                 )
                 
                 task_manager.create_task(task_status_data)
                 
-                # 执行原始函数
+                # 执行原始函数 (pass args without self)
                 try:
-                    result = func(*args, **kwargs)
+                    result = func(self, *args, **kwargs)
                     
                     # 标记任务为已完成
                     task_manager.mark_task_completed(

@@ -1,303 +1,320 @@
 """
 文档处理服务
-负责文档处理流程，包括文档分块、向量化等
+提供文档的解析、分块和索引功能
 """
 import logging
 import json
-import time
-from functools import lru_cache
-from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
-
+import asyncio
+from typing import List, Dict, Any, Optional, Union
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, Segment, DocumentStatus, update_document_status, add_segment
+from app.models.document import Document, Segment, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.services.document_chunker import document_chunker
-from app.core.config import settings
+from app.services.vector_store import add_documents_to_knowledge_base
+from app.models.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-# 创建线程池
-_THREAD_POOL = ThreadPoolExecutor(max_workers=settings.DOCUMENT_PROCESSOR_WORKERS)
-
-
 class DocumentProcessor:
-    """文档处理服务"""
+    """
+    文档处理类
+    提供文档分块、索引和管理功能
+    """
     
-    @staticmethod
-    async def process_document(
-        db: Session,
-        document_id: str,
-        knowledge_base_id: Optional[str] = None
-    ) -> bool:
-        """
-        处理文档，包括分块和向量化
-        
-        Args:
-            db: 数据库会话
-            document_id: 文档ID
-            knowledge_base_id: 关联的知识库ID，如果提供则使用该知识库的分块策略
-            
-        Returns:
-            处理成功返回True，否则返回False
-        """
-        start_time = time.time()
-        try:
-            # 更新文档状态为处理中
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.PROCESSING,
-                db=db
-            )
-            
-            # 获取文档信息
-            document = db.query(Document).filter(Document.id == document_id).first()
-            if not document:
-                logger.error(f"文档不存在: {document_id}")
-                return False
-            
-            # 获取分块策略
-            chunk_size, chunk_overlap, chunking_strategy = DocumentProcessor._get_chunking_config(
-                db, document, knowledge_base_id
-            )
-            
-            # 分块文档
-            chunks = await document_chunker.chunk_document_async(
-                document_path=document.file_path,
-                chunking_strategy=chunking_strategy,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
-            )
-            
-            # 批量添加段落
-            await DocumentProcessor._batch_add_segments(db, document_id, chunks)
-            
-            # 更新文档状态为已完成
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.COMPLETED,
-                segment_count=len(chunks),
-                db=db
-            )
-            
-            processing_time = time.time() - start_time
-            logger.info(f"文档处理完成: {document_id}, 共 {len(chunks)} 个段落, 耗时: {processing_time:.2f}秒")
-            return True
-            
-        except Exception as e:
-            # 记录错误并更新文档状态
-            error_message = f"文档处理失败: {str(e)}"
-            logger.error(error_message)
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.ERROR,
-                error_message=error_message,
-                db=db
-            )
-            return False
-    
-    @staticmethod
-    async def rechunk_document(
-        db: Session,
-        document_id: str,
-        chunk_size: int,
-        chunk_overlap: int,
-        chunking_strategy: str
-    ) -> bool:
-        """
-        重新分块文档
-        
-        Args:
-            db: 数据库会话
-            document_id: 文档ID
-            chunk_size: 分块大小
-            chunk_overlap: 分块重叠大小
-            chunking_strategy: 分块策略
-            
-        Returns:
-            处理成功返回True，否则返回False
-        """
-        start_time = time.time()
-        try:
-            # 获取文档信息
-            document = db.query(Document).filter(Document.id == document_id).first()
-            if not document:
-                logger.error(f"文档不存在: {document_id}")
-                return False
-            
-            # 删除旧的段落，使用批处理提高性能
-            db.query(Segment).filter(Segment.document_id == document_id).delete(synchronize_session=False)
-            
-            # 更新文档状态为处理中
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.PROCESSING,
-                segment_count=0,
-                db=db
-            )
-            
-            # 重新分块文档
-            chunks = await document_chunker.chunk_document_async(
-                document_path=document.file_path,
-                chunking_strategy=chunking_strategy,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
-            )
-            
-            # 批量添加段落
-            await DocumentProcessor._batch_add_segments(db, document_id, chunks)
-            
-            # 更新文档状态为已完成
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.COMPLETED,
-                segment_count=len(chunks),
-                db=db
-            )
-            
-            processing_time = time.time() - start_time
-            logger.info(f"文档重新分块完成: {document_id}, 共 {len(chunks)} 个段落, 耗时: {processing_time:.2f}秒")
-            return True
-            
-        except Exception as e:
-            # 记录错误并更新文档状态
-            error_message = f"文档重新分块失败: {str(e)}"
-            logger.error(error_message)
-            update_document_status(
-                document_id=document_id, 
-                status=DocumentStatus.ERROR,
-                error_message=error_message,
-                db=db
-            )
-            return False
-    
-    @staticmethod
     async def batch_process_documents(
-        db: Session,
+        self, 
+        db: Session, 
         document_ids: List[str],
-        knowledge_base_id: Optional[str] = None
-    ) -> Tuple[int, int]:
+        knowledge_base_id: str
+    ) -> Dict[str, Any]:
         """
         批量处理多个文档
         
         Args:
             db: 数据库会话
-            document_ids: 文档ID列表
-            knowledge_base_id: 关联的知识库ID
+            document_ids: 要处理的文档ID列表
+            knowledge_base_id: 知识库ID
             
         Returns:
-            成功处理的文档数量和失败的文档数量
+            处理结果统计
         """
-        success_count = 0
-        fail_count = 0
+        # 获取知识库信息
+        knowledge_base = db.query(KnowledgeBase).filter(
+            KnowledgeBase.id == knowledge_base_id
+        ).first()
         
-        # 获取分块策略
-        chunk_size = 1000
-        chunk_overlap = 200
-        chunking_strategy = "paragraph"
+        if not knowledge_base:
+            return {
+                "success": False,
+                "error": f"知识库 {knowledge_base_id} 不存在"
+            }
         
-        if knowledge_base_id:
-            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
-            if kb:
-                chunk_size = kb.chunk_size
-                chunk_overlap = kb.chunk_overlap
-                chunking_strategy = kb.chunking_strategy
+        # 获取分块参数
+        chunking_params = {
+            "chunk_size": knowledge_base.chunk_size,
+            "chunk_overlap": knowledge_base.chunk_overlap,
+            "chunking_strategy": knowledge_base.chunking_strategy
+        }
         
-        # 任务批处理
+        # 如果有自定义分隔符
+        if knowledge_base.custom_separators:
+            try:
+                custom_separators = json.loads(knowledge_base.custom_separators)
+                if isinstance(custom_separators, list):
+                    chunking_params["custom_separators"] = custom_separators
+            except:
+                logger.warning(f"解析知识库 {knowledge_base_id} 的自定义分隔符失败")
+        
+        # 处理每个文档
+        results = {
+            "total": len(document_ids),
+            "success": 0,
+            "failed": 0,
+            "details": []
+        }
+        
         for doc_id in document_ids:
             try:
-                result = await DocumentProcessor.process_document(
+                # 获取文档信息
+                document = db.query(Document).filter(
+                    Document.id == doc_id
+                ).first()
+                
+                if not document:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "document_id": doc_id,
+                        "status": "failed",
+                        "error": "文档不存在"
+                    })
+                    continue
+                
+                # 更新文档状态为处理中
+                document.status = DocumentStatus.PROCESSING
+                db.commit()
+                
+                # 处理文档（分块）
+                await self.process_single_document(
                     db=db,
-                    document_id=doc_id,
-                    knowledge_base_id=knowledge_base_id
+                    document=document,
+                    kb_id=knowledge_base_id,
+                    chunking_params=chunking_params
                 )
-                if result:
-                    success_count += 1
-                else:
-                    fail_count += 1
+                
+                results["success"] += 1
+                results["details"].append({
+                    "document_id": doc_id,
+                    "filename": document.filename,
+                    "status": "success",
+                    "segment_count": document.segment_count
+                })
+                
             except Exception as e:
-                logger.error(f"批处理文档出错 {doc_id}: {str(e)}")
-                fail_count += 1
+                logger.exception(f"处理文档 {doc_id} 时出错: {e}")
+                
+                # 更新文档状态为错误
+                try:
+                    document = db.query(Document).filter(
+                        Document.id == doc_id
+                    ).first()
+                    if document:
+                        document.status = DocumentStatus.ERROR
+                        document.error_message = str(e)
+                        db.commit()
+                except:
+                    pass
+                
+                results["failed"] += 1
+                results["details"].append({
+                    "document_id": doc_id,
+                    "status": "failed",
+                    "error": str(e)
+                })
         
-        return success_count, fail_count
+        return results
     
-    @staticmethod
-    @lru_cache(maxsize=32)
-    def _get_chunking_config(
-        db: Session, 
-        document: Document, 
-        knowledge_base_id: Optional[str]
-    ) -> Tuple[int, int, str]:
+    async def process_single_document(
+        self, 
+        db: Session,
+        document: Document,
+        kb_id: str,
+        chunking_params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        获取分块配置（带缓存）
+        处理单个文档
         
         Args:
             db: 数据库会话
             document: 文档对象
-            knowledge_base_id: 知识库ID
+            kb_id: 知识库ID
+            chunking_params: 分块参数
             
         Returns:
-            分块大小，分块重叠大小，分块策略
+            处理结果
         """
-        # 默认分块策略
-        chunk_size = 1000
-        chunk_overlap = 200
-        chunking_strategy = "paragraph"
-        
-        # 如果提供了知识库ID，使用该知识库的分块策略
-        if knowledge_base_id:
-            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
-            if kb:
-                chunk_size = kb.chunk_size
-                chunk_overlap = kb.chunk_overlap
-                chunking_strategy = kb.chunking_strategy
+        try:
+            # 如果未提供分块参数，获取知识库的分块参数
+            if not chunking_params:
+                knowledge_base = db.query(KnowledgeBase).filter(
+                    KnowledgeBase.id == kb_id
+                ).first()
                 
-        # 根据文档类型调整策略
-        file_extension = document.file_type.lower() if document.file_type else ""
-        if file_extension == "md" or file_extension == "markdown":
-            # Markdown文档使用专用分割器
-            chunking_strategy = "markdown"
-        
-        return chunk_size, chunk_overlap, chunking_strategy
+                if not knowledge_base:
+                    raise ValueError(f"知识库 {kb_id} 不存在")
+                
+                chunking_params = {
+                    "chunk_size": knowledge_base.chunk_size,
+                    "chunk_overlap": knowledge_base.chunk_overlap,
+                    "chunking_strategy": knowledge_base.chunking_strategy
+                }
+                
+                # 如果有自定义分隔符
+                if knowledge_base.custom_separators:
+                    try:
+                        custom_separators = json.loads(knowledge_base.custom_separators)
+                        if isinstance(custom_separators, list):
+                            chunking_params["custom_separators"] = custom_separators
+                    except:
+                        logger.warning(f"解析知识库 {kb_id} 的自定义分隔符失败")
+            
+            # 更新文档状态为处理中
+            document.status = DocumentStatus.PROCESSING
+            db.commit()
+            
+            # 分块
+            chunks = document_chunker.chunk_document(
+                document.file_path,
+                document.filename,
+                **chunking_params
+            )
+            
+            if not chunks:
+                raise ValueError("文档分块后未产生任何内容")
+            
+            # 清除之前的段落
+            db.query(Segment).filter(
+                Segment.document_id == document.id
+            ).delete(synchronize_session=False)
+            
+            # 添加新段落
+            for i, chunk in enumerate(chunks):
+                # 准备元数据
+                metadata = chunk.metadata
+                metadata["document_id"] = document.id
+                metadata["chunk_id"] = f"{document.id}_{i}"
+                metadata["knowledge_base_id"] = kb_id
+                
+                # 序列化元数据
+                metadata_json = json.dumps(metadata)
+                
+                # 创建段落记录
+                segment = Segment(
+                    document_id=document.id,
+                    content=chunk.page_content,
+                    meta_data=metadata_json,
+                    chunk_index=i,
+                    enabled=1
+                )
+                db.add(segment)
+            
+            # 更新文档状态
+            document.status = DocumentStatus.COMPLETED
+            document.segment_count = len(chunks)
+            document.error_message = None
+            db.commit()
+            
+            # 准备向量存储添加的数据
+            texts = [chunk.page_content for chunk in chunks]
+            metadatas = [chunk.metadata for chunk in chunks]
+            
+            # 添加到向量存储
+            add_documents_to_knowledge_base(
+                kb_id=kb_id,
+                documents=texts,
+                metadatas=metadatas
+            )
+            
+            return {
+                "success": True,
+                "document_id": document.id,
+                "segment_count": len(chunks)
+            }
+            
+        except Exception as e:
+            logger.exception(f"处理文档 {document.id} 时出错: {e}")
+            
+            # 更新文档状态为错误
+            document.status = DocumentStatus.ERROR
+            document.error_message = str(e)
+            db.commit()
+            
+            raise
     
-    @staticmethod
-    async def _batch_add_segments(db: Session, document_id: str, chunks: List[Dict[str, Any]]) -> None:
+    def process_document(
+        self, 
+        db: Session, 
+        document_id: str, 
+        knowledge_base_id: str
+    ) -> None:
         """
-        批量添加段落记录以提高性能
+        异步处理文档，适合在API调用中使用
         
         Args:
             db: 数据库会话
             document_id: 文档ID
-            chunks: 分块结果列表
+            knowledge_base_id: 知识库ID
         """
-        segments = []
+        # 获取文档对象
+        document = db.query(Document).filter(
+            Document.id == document_id
+        ).first()
         
-        for chunk in chunks:
-            # 转换元数据为JSON字符串
-            if isinstance(chunk["meta_data"], dict):
-                meta_data_json = json.dumps(chunk["meta_data"], ensure_ascii=False)
-            else:
-                meta_data_json = "{}"
-            
-            # 创建段落数据
-            segment_data = {
-                "document_id": document_id,
-                "content": chunk["content"],
-                "meta_data": meta_data_json,
-                "chunk_index": chunk["chunk_index"],
-                "enabled": 1
-            }
-            segments.append(segment_data)
+        if not document:
+            logger.error(f"文档 {document_id} 不存在")
+            return
         
-        # 每批50条记录插入数据库
-        batch_size = 50
-        for i in range(0, len(segments), batch_size):
-            batch = segments[i:i+batch_size]
-            segment_objects = [Segment(**data) for data in batch]
-            db.add_all(segment_objects)
-            db.commit()
+        # 创建异步任务处理文档
+        async def _process():
+            # 创建新的数据库会话
+            new_db = SessionLocal()
+            try:
+                # 重新获取文档和知识库信息
+                doc = new_db.query(Document).filter(
+                    Document.id == document_id
+                ).first()
+                
+                kb = new_db.query(KnowledgeBase).filter(
+                    KnowledgeBase.id == knowledge_base_id
+                ).first()
+                
+                if not doc:
+                    logger.error(f"文档 {document_id} 不存在")
+                    return
+                
+                if not kb:
+                    logger.error(f"知识库 {knowledge_base_id} 不存在")
+                    return
+                
+                # 处理文档
+                await self.process_single_document(
+                    db=new_db,
+                    document=doc,
+                    kb_id=knowledge_base_id
+                )
+                
+            except Exception as e:
+                logger.exception(f"异步处理文档 {document_id} 时出错: {e}")
+            finally:
+                new_db.close()
+        
+        # 更新文档状态为处理中
+        document.status = DocumentStatus.PROCESSING
+        db.commit()
+        
+        # 启动异步任务
+        asyncio.create_task(_process())
+        
 
-
-# 创建文档处理服务单例
+# 创建单例
 document_processor = DocumentProcessor()
