@@ -82,7 +82,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def general_exception_handler(request: Request, exc: Exception):
     """处理通用异常"""
     # 在生产环境不返回详细错误信息，而只返回通用错误消息
-    if settings.ENVIRONMENT == "production":
+    if settings.environment == "production":
         content = {"detail": "服务器内部错误"}
     else:
         content = {"detail": str(exc)}

@@ -17,13 +17,8 @@ from app.models.database import Base, SessionLocal
 
 logger = logging.getLogger(__name__)
 
-# 知识库与文档的多对多关联表
-knowledge_base_documents = Table(
-    "knowledge_base_documents",
-    Base.metadata,
-    Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
-    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
-)
+# 知识库表会在 knowledge_base.py 中定义，此处导入而不重复定义
+# 如需使用，从 knowledge_base.py 导入 knowledge_base_document
 
 # 文档状态枚举
 class DocumentStatus(str, Enum):
@@ -90,7 +85,7 @@ class Document(Base):
     segments = relationship("Segment", back_populates="document", cascade="all, delete-orphan")
     
     # 与知识库的多对多关系
-    knowledge_bases = relationship("KnowledgeBase", secondary="knowledge_base_documents", back_populates="documents")
+    knowledge_bases = relationship("KnowledgeBaseDB", secondary="knowledge_base_document", back_populates="documents")
     
     __table_args__ = (
         {'mysql_charset': 'utf8mb4', 'mysql_collate': 'utf8mb4_unicode_ci'},

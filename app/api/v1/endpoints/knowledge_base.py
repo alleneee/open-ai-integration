@@ -65,8 +65,10 @@ async def create_knowledge_base(
         )
         
         # 创建向量存储集合
+        # 将ID中的连字符替换为下划线，以符合Milvus命名要求
+        collection_name = f"kb_{new_kb.id.replace('-', '_')}"
         collection_created = create_collection(
-            collection_name=new_kb.id,
+            collection_name=collection_name,
             dimension=kb_create.embedding_dimension or 1536
         )
         
@@ -196,7 +198,9 @@ async def get_knowledge_base(
         kb_detail = kb_service.get_knowledge_base_with_documents(db=db, kb_id=kb_id)
         
         # 获取向量存储统计信息
-        vector_stats = get_knowledge_base_stats(kb_id)
+        # 将ID中的连字符替换为下划线，以符合Milvus命名要求
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        vector_stats = get_knowledge_base_stats(collection_name)
         if vector_stats:
             kb_detail.vector_stats = vector_stats
         
@@ -238,10 +242,12 @@ async def update_knowledge_base(
             )
         
         # 检查向量存储集合是否存在
-        if not check_collection_exists(kb_id):
+        # 将ID中的连字符替换为下划线，以符合Milvus命名要求
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        if not check_collection_exists(collection_name):
             # 向量存储不存在，创建新的集合
             collection_created = create_collection(
-                collection_name=kb_id,
+                collection_name=collection_name,
                 dimension=kb_update.embedding_dimension or 1536
             )
             
@@ -341,10 +347,12 @@ async def add_documents_to_knowledge_base(
             )
         
         # 检查向量存储集合是否存在
-        if not check_collection_exists(kb_id):
+        # 将ID中的连字符替换为下划线，以符合Milvus命名要求
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        if not check_collection_exists(collection_name):
             # 向量存储不存在，创建新的集合
             collection_created = create_collection(
-                collection_name=kb_id,
+                collection_name=collection_name,
                 dimension=1536
             )
             

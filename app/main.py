@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.cache import setup_cache
 from app.api.api import api_router # 导入主API路由
+from app.api import public_routes # 导入公共路由
 from app.models.database import initialize_db
 from app.services.vector_store import get_milvus_connection, _get_embedding_instance
 
@@ -94,20 +95,20 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 async def api_route_middleware(request: Request, call_next):
     path = request.url.path
     
-    # 如果是API路由，正常处理
-    if path.startswith(settings.api_v1_prefix):
-        logger.debug(f"处理API请求: {path}")
+    # 如果是API路由 (以 /api/v1 开头) 或 公共路由 (以 /public 开头)，正常处理
+    if path.startswith(settings.api_v1_prefix) or path.startswith("/public"):
+        logger.debug(f"处理API或公共请求: {path}")
         return await call_next(request)
     
     # 如果是根路径或文档路径，正常处理
     if path == "/" or path.startswith(f"{settings.api_v1_prefix}/docs") or path.startswith(f"{settings.api_v1_prefix}/redoc") or path == "/health":
         return await call_next(request)
     
-    # 如果不是API请求，返回404，告知前端路由不处理
-    logger.warning(f"非API路径请求: {path} - 返回404")
+    # 如果不是允许的请求，返回404
+    logger.warning(f"不允许的路径请求: {path} - 返回404")
     return JSONResponse(
         status_code=404, 
-        content={"detail": "此服务器仅处理API请求"}
+        content={"detail": f"此端点不存在，API路径应以 {settings.api_v1_prefix} 或 /public 开头"}
     )
     
 # CORS
@@ -142,8 +143,10 @@ async def add_process_time_header(request: Request, call_next):
     return response
 
 # --- Routers ---
-# 包含主 API 路由
-app.include_router(api_router, prefix=settings.api_v1_prefix)
+# 包含需要认证的 API 路由 (前缀在 api.py 中定义)
+app.include_router(api_router)
+# 包含公共 API 路由
+app.include_router(public_routes.router, prefix="/public", tags=["Public"])
 
 # --- Root Endpoint ---
 @app.get("/", tags=["Root"], include_in_schema=False)  # 从文档中隐藏根目录

@@ -16,7 +16,7 @@ from pathlib import Path
 from functools import lru_cache
 
 # Langchain core and common text splitters
-from langchain.text_splitter import (
+from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     MarkdownTextSplitter,
     TokenTextSplitter,
@@ -28,7 +28,7 @@ from langchain.text_splitter import (
 # Remove the problematic import
 # from langchain_text_splitters.code import JavascriptTextSplitter
 
-from langchain.document_loaders import (
+from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
     Docx2txtLoader,

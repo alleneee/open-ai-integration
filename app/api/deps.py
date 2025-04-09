@@ -18,7 +18,8 @@ from app.core.security import decode_token
 logger = logging.getLogger(__name__)
 
 # OAuth2 认证处理
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=settings.TOKEN_URL)
+# 设置 auto_error=False，这样即使没有令牌也不会自动报错
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=settings.TOKEN_URL, auto_error=False)
 
 def get_db() -> Generator[Session, None, None]:
     """
@@ -73,14 +74,14 @@ def get_current_user_id(
     return x_user_id
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
     """
     获取当前已认证用户
     
     Args:
-        token: JWT访问令牌
+        token: JWT访问令牌 (现在是可选的)
         db: 数据库会话
         
     Returns:
@@ -89,31 +90,33 @@ def get_current_user(
     Raises:
         HTTPException: 认证失败或用户不存在时
     """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无效的认证凭据",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    if token is None: # 如果 auto_error=False 且没有提供 token，显式抛出异常
+        raise credentials_exception
+        
     try:
         payload = decode_token(token)
         user_id: str = payload.get("sub")
         if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效的认证凭据",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise credentials_exception # 保持不变
     except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的认证凭据",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise credentials_exception # 保持不变
     
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
+        # 改为 401 可能更合适，因为令牌可能有效但用户不存在
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户不存在"
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="用户不存在或令牌无效" # 更新消息
         )
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_400_BAD_REQUEST, # 保持 400
             detail="用户已停用"
         )
     

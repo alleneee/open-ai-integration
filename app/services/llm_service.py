@@ -58,7 +58,7 @@ class OpenAIProvider(BaseLLMProvider):
         try:
             from openai import AsyncOpenAI
             api_key = settings.openai_api_key
-            base_url = settings.openai_api_base
+            base_url = getattr(settings, "openai_api_base", None)
             
             client_kwargs = {"api_key": api_key}
             if base_url:
@@ -137,7 +137,7 @@ class OpenAIProvider(BaseLLMProvider):
     async def embed_query(self, text: str) -> List[float]:
         """获取文本的嵌入向量"""
         try:
-            embedding_model = settings.default_embedding_model or "text-embedding-ada-002"
+            embedding_model = settings.embedding_model_name
             response = await self.client.embeddings.create(
                 model=embedding_model,
                 input=text

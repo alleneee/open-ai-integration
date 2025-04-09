@@ -87,7 +87,8 @@ knowledge_base_document = Table(
     "knowledge_base_document",
     Base.metadata,
     Column("knowledge_base_id", String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True),
-    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    Column("document_id", String(36), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True),
+    extend_existing=True
 )
 
 
