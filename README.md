@@ -93,8 +93,9 @@
     ```
 
 3. **创建并配置环境文件:**
-    * 复制 `.env.example` 文件 (如果存在) 或根据之前生成的 `.env` 创建: `cp .env.example .env`
+    * 复制 `.env.template` 文件到 `.env`: `cp .env.template .env`
     * 编辑 `.env` 文件, 填入您的 Milvus 连接信息, Redis URL (包括 Celery 和会话), MySQL 数据库连接信息, LLM API 密钥, JWT 密钥, 以及期望的模型名称。
+    * 注意: `.env` 文件包含敏感信息，已添加到 .gitignore 中，确保不要将其提交到版本控制系统。
 
 4. **安装依赖:**
 
