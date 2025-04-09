@@ -29,11 +29,16 @@
     │   ├── api.py        # API 路由注册
     │   ├── deps.py       # API 依赖项 (如认证)
     │   ├── v1/
+    │   │   ├── router.py # API v1版本路由集合
     │   │   ├── auth.py   # 认证相关路由
+    │   │   ├── tasks.py  # 任务管理路由
     │   │   └── endpoints/
-    │   │       ├── upload.py      # 文档上传和处理的端点
-    │   │       ├── query.py       # RAG 查询的端点
-    │   │       └── knowledge_bases.py # 知识库管理端点
+    │   │       ├── upload.py          # 文档上传和处理的端点
+    │   │       ├── query.py           # RAG 查询的端点
+    │   │       ├── documents.py       # 文档管理端点  
+    │   │       ├── knowledge_base.py  # 知识库管理端点
+    │   │       ├── knowledge_bases.py # 增强版知识库管理端点
+    │   │       └── knowledgebase.py   # 传统知识库管理端点
     ├── core/
     │   ├── config.py     # 配置加载 (Pydantic BaseSettings)
     │   ├── security.py   # 安全相关功能 (如密码哈希, JWT)
