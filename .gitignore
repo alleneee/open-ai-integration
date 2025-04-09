@@ -162,4 +162,7 @@ Thumbs.db
 #忽略dify
 dify/
 
+# Node modules
+web/node_modules/
+
 .windsurfrules
