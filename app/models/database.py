@@ -3,13 +3,16 @@
 提供 SQLAlchemy 配置、连接池管理和会话处理
 """
 import logging
-from typing import Generator
+from typing import Generator, List, Optional
+from datetime import datetime
+from uuid import uuid4
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Integer, JSON, Enum
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from app.core.config import settings
+from app.models.conversation import MessageRole, ConversationState
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,39 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 创建 Base 类作为所有模型的基类
 Base = declarative_base()
+
+# 对话模型
+class Conversation(Base):
+    """对话数据库模型"""
+    __tablename__ = "conversations"
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    title = Column(String(255), nullable=False)
+    created_by = Column(String(36), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    state = Column(Enum(ConversationState), default=ConversationState.ACTIVE)
+    meta_data = Column(JSON, nullable=True)
+    
+    # 关系：一个对话有多个消息
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+
+
+# 消息模型
+class Message(Base):
+    """消息数据库模型"""
+    __tablename__ = "messages"
+    
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    conversation_id = Column(String(36), ForeignKey("conversations.id"), nullable=False)
+    role = Column(Enum(MessageRole), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    meta_data = Column(JSON, nullable=True)
+    
+    # 关系：一个消息属于一个对话
+    conversation = relationship("Conversation", back_populates="messages")
+
 
 def initialize_db() -> None:
     """初始化数据库，创建所有表"""

@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.models.database import Base
 from app.models.document import Document, Segment  # 文档相关模型
 from app.models.user import User, Role, Permission, user_role  # 用户认证相关模型
-from app.models.knowledge_base import KnowledgeBase, knowledge_base_document  # 知识库相关模型
+from app.models.knowledge_base import KnowledgeBaseDB, knowledge_base_document  # 知识库相关模型
 
 # 这是Alembic配置对象
 config = context.config
