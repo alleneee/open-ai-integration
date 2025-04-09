@@ -15,11 +15,12 @@ from app.models.knowledge_base import (
     KnowledgeBaseDetailSchema,
     ChunkingConfig,
     DatasetPermissionEnum,
-    KnowledgeBasePermission
+    KnowledgeBasePermission,
+    KnowledgeBaseStats
 )
 from app.models.document import Document, DocumentStatus, Segment, knowledge_base_documents
 from app.services.document_processor import document_processor
-from app.models.database import SessionLocal, db
+from app.models.database import SessionLocal
 import asyncio
 import logging
 from datetime import datetime
@@ -36,9 +37,6 @@ from app.services.vector_store import (
 )
 from sqlalchemy.exc import IntegrityError
 from app.models.user import User
-from app.db.crud import create_item, get_items, get_item, update_item, delete_item
-from app.db.models import KnowledgeBase as KnowledgeBaseDB, KnowledgeBaseDocument as KnowledgeBaseDocumentDB
-from app.models.knowledge_base import KnowledgeBaseStats
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -803,6 +801,9 @@ class KnowledgeBaseService:
 
 # 创建知识库服务单例
 knowledge_base_service = KnowledgeBaseService()
+
+# 为导入兼容性添加别名
+kb_service = knowledge_base_service
 
 async def create_knowledge_base(kb_data: KnowledgeBaseCreate) -> KnowledgeBase:
     """

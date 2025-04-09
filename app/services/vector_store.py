@@ -869,4 +869,74 @@ def sync_knowledge_base_metadata(kb_id: str, metadata: Dict[str, Any]) -> bool:
         
     except Exception as e:
         logger.exception(f"同步知识库 {kb_id} 元数据时出错: {e}")
-        return False 
+        return False
+
+def search_knowledge_base(query: str, kb_ids: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
+    """从知识库中搜索相关文档
+    
+    参数:
+        query: 搜索查询
+        kb_ids: 知识库ID列表
+        top_k: 返回结果数量
+        
+    返回:
+        包含内容和元数据的文档列表
+    """
+    logger.info(f"从知识库 {kb_ids} 搜索: {query}")
+    results = []
+    
+    try:
+        # 获取嵌入模型
+        embeddings = _get_embedding_instance()
+        
+        # 为每个知识库执行搜索
+        for kb_id in kb_ids:
+            # 检查知识库是否存在
+            if not check_collection_exists(kb_id):
+                logger.warning(f"知识库 {kb_id} 不存在，跳过")
+                continue
+                
+            # 创建Milvus实例
+            try:
+                # 准备连接参数
+                connection_args = {"uri": settings.milvus_uri}
+                if settings.milvus_token and settings.milvus_token != "your-milvus-api-key":
+                    connection_args["token"] = settings.milvus_token
+                
+                vector_store = Milvus(
+                    collection_name=kb_id,
+                    embedding_function=embeddings,
+                    connection_args=connection_args
+                )
+                
+                # 执行相似性搜索
+                docs_with_scores = vector_store.similarity_search_with_score(
+                    query=query,
+                    k=top_k
+                )
+                
+                # 处理结果
+                for doc, score in docs_with_scores:
+                    # 标准化分数，Milvus返回的是L2距离，越小越好
+                    # 将其转换为0-1范围的相似度分数
+                    normalized_score = 1.0 / (1.0 + score)
+                    
+                    results.append({
+                        "content": doc.page_content,
+                        "source": doc.metadata.get("source", kb_id),
+                        "score": normalized_score,
+                        "metadata": doc.metadata
+                    })
+            except Exception as e:
+                logger.error(f"搜索知识库 {kb_id} 时出错: {e}")
+                continue
+        
+        # 按相似度分数排序
+        results.sort(key=lambda x: x["score"], reverse=True)
+        
+        # 仅返回前top_k个结果
+        return results[:top_k]
+        
+    except Exception as e:
+        logger.exception(f"搜索知识库时出错: {e}")
+        return [] 
