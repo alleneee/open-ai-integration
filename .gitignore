@@ -164,5 +164,10 @@ dify/
 
 # Node modules
 web/node_modules/
+web/.next/
+
+# Next.js build output
+.next/
+out/
 
 .windsurfrules
